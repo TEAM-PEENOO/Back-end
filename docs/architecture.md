@@ -31,6 +31,17 @@ FastAPI Backend
         +--> Claude API
 ```
 
+```mermaid
+flowchart LR
+    A[React Native Expo] -->|JWT HTTPS| B[FastAPI]
+    B --> C[(PostgreSQL)]
+    B --> D[Claude API]
+    B --> E[Placement CAT]
+    B --> F[Teaching SSE]
+    B --> G[Exam Grading]
+    G --> H[answer_key purge]
+```
+
 ## 3) Backend Module Layout
 
 ```text
@@ -101,6 +112,21 @@ backend/
 5. Server computes combined score and level-up rule.
 6. Server calls `purge_exam_answer_keys(exam_id)` to remove answer keys.
 7. Return only result summary, never return correct answers.
+
+## 4-1) Core Data Model (ERD)
+
+```mermaid
+erDiagram
+    USERS ||--|| PERSONAS : has_one
+    PERSONAS ||--o{ TEACHING_SESSIONS : has_many
+    TEACHING_SESSIONS ||--o{ TEACHING_MESSAGES : has_many
+    TEACHING_SESSIONS ||--o{ SESSION_WEAK_POINTS : has_many
+    PERSONAS ||--o{ PERSONA_CONCEPTS : has_many
+    PERSONAS ||--o{ WEAK_POINT_TAGS : has_many
+    PERSONAS ||--o{ EXAMS : has_many
+    EXAMS ||--o{ EXAM_QUESTIONS : has_many
+    EXAM_QUESTIONS ||--o{ EXAM_ANSWERS : has_many
+```
 
 ## 5) Security Baseline
 

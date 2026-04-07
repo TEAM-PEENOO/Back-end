@@ -33,7 +33,7 @@ class Persona(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     personality: Mapped[str] = mapped_column(
-        Enum("curious", "careful", "clumsy", "perfectionist", name="personality_type"),
+        Enum("curious", "careful", "clumsy", "perfectionist", "steady", name="personality_type"),
         nullable=False,
     )
     subject: Mapped[str] = mapped_column(String, default="math", nullable=False)
@@ -76,6 +76,26 @@ class WeakPointTag(Base):
     last_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 
+class PersonaConcept(Base):
+    __tablename__ = "persona_concepts"
+    __table_args__ = (UniqueConstraint("persona_id", "concept", name="uq_persona_concepts_persona_concept"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    persona_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("personas.id", ondelete="CASCADE"), nullable=False)
+    concept: Mapped[str] = mapped_column(String, nullable=False)
+    taught_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    stability: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    last_taught_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class SessionWeakPoint(Base):
+    __tablename__ = "session_weak_points"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teaching_sessions.id", ondelete="CASCADE"), nullable=False)
+    concept: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class Exam(Base):
     __tablename__ = "exams"
     __table_args__ = (CheckConstraint("level BETWEEN 1 AND 9", name="chk_exams_level"),)
@@ -109,7 +129,10 @@ class ExamQuestion(Base):
 
 class ExamAnswer(Base):
     __tablename__ = "exam_answers"
-    __table_args__ = (UniqueConstraint("question_id", "actor", name="uq_exam_answer_actor"),)
+    __table_args__ = (
+        UniqueConstraint("question_id", "actor", name="uq_exam_answer_actor"),
+        CheckConstraint("actor IN ('user','persona')", name="chk_exam_answers_actor"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     question_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("exam_questions.id", ondelete="CASCADE"), nullable=False)

@@ -31,7 +31,24 @@ Open:
 - Health: `http://localhost:8000/api/v1/health`
 - Docs: `http://localhost:8000/docs`
 
+## DB migration (Alembic)
+
+Run initial migration:
+
+```bash
+alembic upgrade head
+```
+
+Create new migration after model changes:
+
+```bash
+alembic revision --autogenerate -m "describe change"
+alembic upgrade head
+```
+
 ## Notes
 
-- The teaching stream endpoint is a placeholder SSE generator. Replace with Claude streaming tokens.
-- DB models are a minimal subset; expand as you implement placement/exam features.
+- Teaching stream endpoint uses Claude streaming tokens with fallback behavior.
+- Placement/Exam question generation uses Claude JSON output with deterministic fallback.
+- Security baseline includes Redis rate limiting, JWT issuer/audience validation, security headers, trusted hosts, and structured audit logs.
+- Before deploy, configure `REDIS_URL` and `SENTRY_DSN` in `.env`.

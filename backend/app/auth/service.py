@@ -21,6 +21,8 @@ def create_access_token(*, user_id: str, expires_minutes: int = 60 * 24 * 7) -> 
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=expires_minutes)).timestamp()),
     }
