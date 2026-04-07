@@ -171,10 +171,14 @@ PROVE/
     ├── initial_idea_2.md      ← 제약 조건 반영 재기획 (1주일 + 창의성 우선)
     ├── surved_initial_idea.md ← 게임화 통합 및 비판적 보완
     ├── prompt_history.md      ← AI 협업 프롬프트 전체 로그
-    └── instruction.md         ← AI 프롬프트 엔지니어링 지침서 (5종)
+    ├── instruction.md         ← AI 프롬프트 엔지니어링 지침서 (5종)
+    ├── db_schema.sql          ← MVP PostgreSQL 스키마
+    ├── api_spec.yaml          ← MVP OpenAPI 3.0 명세
+    └── architecture.md        ← MVP 시스템 아키텍처
 ```
 
 > 전체 상세 기획서는 [`docs/proposal.md`](docs/proposal.md)를 참고하세요.
+> 구현 시작용 설계 문서: [`docs/db_schema.sql`](docs/db_schema.sql), [`docs/api_spec.yaml`](docs/api_spec.yaml), [`docs/architecture.md`](docs/architecture.md)
 
 ---
 

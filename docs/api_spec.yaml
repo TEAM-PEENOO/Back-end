@@ -1,0 +1,568 @@
+openapi: 3.0.3
+info:
+  title: My Jeja API
+  version: 1.0.0
+  description: |
+    MVP API for My Jeja.
+    Scope: math-only, levels 1-9, streaming teaching chat, secure exam grading.
+servers:
+  - url: https://your-service.up.railway.app/api/v1
+tags:
+  - name: Auth
+  - name: Persona
+  - name: Placement
+  - name: Teaching
+  - name: Exam
+  - name: Dashboard
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          description: Access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /persona:
+    post:
+      tags: [Persona]
+      summary: Create persona (one per user in MVP)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePersonaRequest'
+      responses:
+        '200':
+          description: Persona created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonaResponse'
+
+  /persona/me:
+    get:
+      tags: [Persona]
+      summary: Get current user's persona
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Persona summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonaResponse'
+    patch:
+      tags: [Persona]
+      summary: Update persona profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePersonaRequest'
+      responses:
+        '200':
+          description: Persona updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonaResponse'
+
+  /placement/start:
+    post:
+      tags: [Placement]
+      summary: Start placement exam and return first question
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Placement started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlacementStartResponse'
+
+  /placement/answer:
+    post:
+      tags: [Placement]
+      summary: Submit one answer and return next question or result
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlacementAnswerRequest'
+      responses:
+        '200':
+          description: Placement progress or completion
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PlacementInProgressResponse'
+                  - $ref: '#/components/schemas/PlacementCompletedResponse'
+
+  /teaching/sessions:
+    post:
+      tags: [Teaching]
+      summary: Create teaching session
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTeachingSessionRequest'
+      responses:
+        '200':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTeachingSessionResponse'
+
+  /teaching/sessions/{session_id}/messages:
+    post:
+      tags: [Teaching]
+      summary: Save user message in session
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageRequest'
+      responses:
+        '200':
+          description: Message accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+
+  /teaching/sessions/{session_id}/stream:
+    post:
+      tags: [Teaching]
+      summary: Stream LLM response (SSE)
+      description: |
+        Returns text/event-stream.
+        Server emits `token` events and final `done` event.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [socratic]
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /teaching/sessions/{session_id}/finish:
+    post:
+      tags: [Teaching]
+      summary: Evaluate session and update weak points/memory
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeachingResultResponse'
+
+  /exams:
+    post:
+      tags: [Exam]
+      summary: Create regular exam
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Exam created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateExamResponse'
+
+  /exams/{exam_id}/submit:
+    post:
+      tags: [Exam]
+      summary: Submit answers, grade, run persona solve, purge answer keys
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: exam_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitExamRequest'
+      responses:
+        '200':
+          description: Exam result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitExamResponse'
+
+  /dashboard/home:
+    get:
+      tags: [Dashboard]
+      summary: Home summary (status card)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Home data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeResponse'
+
+  /history/teaching:
+    get:
+      tags: [Dashboard]
+      summary: Teaching session history
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TeachingHistoryItem'
+
+  /history/exams:
+    get:
+      tags: [Dashboard]
+      summary: Exam history
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: List of exams
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExamHistoryItem'
+
+  /weak-points:
+    get:
+      tags: [Dashboard]
+      summary: Weak point tags
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Weak points
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WeakPointItem'
+
+  /health:
+    get:
+      tags: [Dashboard]
+      summary: Health check
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    AuthResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, example: bearer }
+    CreatePersonaRequest:
+      type: object
+      required: [name, personality]
+      properties:
+        name: { type: string }
+        personality:
+          type: string
+          enum: [curious, careful, clumsy, perfectionist]
+    UpdatePersonaRequest:
+      type: object
+      properties:
+        name: { type: string }
+        personality:
+          type: string
+          enum: [curious, careful, clumsy, perfectionist]
+    PersonaResponse:
+      type: object
+      properties:
+        persona_id: { type: string, format: uuid }
+        name: { type: string }
+        personality:
+          type: string
+          enum: [curious, careful, clumsy, perfectionist]
+        current_level: { type: integer, minimum: 1, maximum: 9 }
+        placement_done: { type: boolean }
+    PlacementQuestion:
+      type: object
+      properties:
+        question_id: { type: string, format: uuid }
+        question_no: { type: integer }
+        type: { type: string, enum: [multiple_choice] }
+        content: { type: string }
+        options:
+          type: array
+          items: { type: string }
+    PlacementStartResponse:
+      type: object
+      properties:
+        exam_id: { type: string, format: uuid }
+        current_level: { type: integer, minimum: 1, maximum: 9 }
+        question:
+          $ref: '#/components/schemas/PlacementQuestion'
+    PlacementAnswerRequest:
+      type: object
+      required: [exam_id, question_id, answer]
+      properties:
+        exam_id: { type: string, format: uuid }
+        question_id: { type: string, format: uuid }
+        answer: { type: string }
+    PlacementInProgressResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [in_progress] }
+        current_level: { type: integer, minimum: 1, maximum: 9 }
+        next_question:
+          $ref: '#/components/schemas/PlacementQuestion'
+    PlacementCompletedResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [completed] }
+        result:
+          type: object
+          properties:
+            start_level: { type: integer, minimum: 1, maximum: 9 }
+            known_concepts:
+              type: array
+              items: { type: string }
+            weak_concepts:
+              type: array
+              items: { type: string }
+            summary: { type: string }
+    CreateTeachingSessionRequest:
+      type: object
+      required: [concept]
+      properties:
+        concept: { type: string }
+    CreateTeachingSessionResponse:
+      type: object
+      properties:
+        session_id: { type: string, format: uuid }
+    MessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content: { type: string }
+    OkResponse:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+    TeachingResultResponse:
+      type: object
+      properties:
+        score: { type: integer, minimum: 0, maximum: 100 }
+        grade_label: { type: string, example: A }
+        weak_points:
+          type: array
+          items: { type: string }
+        next_focus: { type: string }
+    ExamQuestion:
+      type: object
+      properties:
+        question_id: { type: string, format: uuid }
+        question_no: { type: integer }
+        type: { type: string, enum: [multiple_choice, short_answer] }
+        content: { type: string }
+        options:
+          type: array
+          items: { type: string }
+          nullable: true
+    CreateExamResponse:
+      type: object
+      properties:
+        exam_id: { type: string, format: uuid }
+        level: { type: integer, minimum: 1, maximum: 9 }
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExamQuestion'
+    SubmitExamRequest:
+      type: object
+      required: [answers]
+      properties:
+        answers:
+          type: array
+          items:
+            type: object
+            required: [question_id, answer]
+            properties:
+              question_id: { type: string, format: uuid }
+              answer: { type: string }
+    SubmitExamResponse:
+      type: object
+      properties:
+        user_score: { type: integer, minimum: 0, maximum: 100 }
+        persona_score: { type: integer, minimum: 0, maximum: 100 }
+        combined_score: { type: integer, minimum: 0, maximum: 100 }
+        passed: { type: boolean }
+        level_before: { type: integer, minimum: 1, maximum: 9 }
+        level_after: { type: integer, minimum: 1, maximum: 9 }
+        weak_points_updated:
+          type: array
+          items: { type: string }
+    HomeResponse:
+      type: object
+      properties:
+        level: { type: integer, minimum: 1, maximum: 9 }
+        retention_summary: { type: number, format: float }
+        next_goal: { type: string }
+        recent_session_count: { type: integer }
+    TeachingHistoryItem:
+      type: object
+      properties:
+        session_id: { type: string, format: uuid }
+        concept: { type: string }
+        quality_score: { type: integer, minimum: 0, maximum: 100 }
+        created_at: { type: string, format: date-time }
+    ExamHistoryItem:
+      type: object
+      properties:
+        exam_id: { type: string, format: uuid }
+        exam_type: { type: string, enum: [placement, regular] }
+        level: { type: integer, minimum: 1, maximum: 9 }
+        combined_score: { type: integer, minimum: 0, maximum: 100 }
+        passed: { type: boolean }
+        created_at: { type: string, format: date-time }
+    WeakPointItem:
+      type: object
+      properties:
+        concept: { type: string }
+        fail_count: { type: integer, minimum: 1 }
+        last_failed_at: { type: string, format: date-time }
