@@ -38,11 +38,14 @@ async def verify_google_id_token(id_token: str) -> dict[str, str]:
     if not settings.google_client_id:
         raise ValueError("GOOGLE_CLIENT_ID is not configured")
 
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        resp = await client.get(
-            "https://oauth2.googleapis.com/tokeninfo",
-            params={"id_token": id_token},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": id_token},
+            )
+    except httpx.HTTPError as exc:
+        raise ValueError(f"Google tokeninfo request failed: {exc!s}")
     if resp.status_code != 200:
         raise ValueError("Invalid Google id_token")
 
@@ -79,20 +82,23 @@ def build_google_oauth_url(*, state: str, redirect_uri: str) -> str:
 async def exchange_google_code_for_id_token(*, code: str, redirect_uri: str) -> str:
     if not settings.google_client_id or not settings.google_client_secret:
         raise ValueError("Google OAuth credentials are not configured")
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "code": code,
-                "client_id": settings.google_client_id,
-                "client_secret": settings.google_client_secret,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.google_client_id,
+                    "client_secret": settings.google_client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+    except httpx.HTTPError as exc:
+        raise ValueError(f"Google token exchange request failed: {exc!s}")
     if resp.status_code != 200:
-        raise ValueError("Failed to exchange authorization code")
+        raise ValueError(f"Failed to exchange authorization code: status={resp.status_code}")
     id_token = resp.json().get("id_token")
     if not id_token:
         raise ValueError("Google response missing id_token")

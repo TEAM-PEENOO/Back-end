@@ -149,22 +149,22 @@ async def google_oauth_callback(
     try:
         id_token = await exchange_google_code_for_id_token(code=code, redirect_uri=settings.google_oauth_redirect_uri)
         claims = await verify_google_id_token(id_token)
-    except ValueError as exc:
+
+        email = claims["email"]
+        user = await db.scalar(select(User).where(User.email == email))
+        if not user:
+            user = User(id=uuid.uuid4(), email=email, password_hash=hash_password(str(uuid.uuid4())))
+            db.add(user)
+            await db.commit()
+
+        token = create_access_token(user_id=str(user.id))
+        audit_event(request=request, event="auth.google.callback", outcome="success", user_id=str(user.id), email=email)
+        success_url = append_token_to_redirect_url(redirect_uri=app_redirect_uri, access_token=token)
+        return RedirectResponse(url=success_url, status_code=302)
+    except Exception as exc:
         audit_event(request=request, event="auth.google.callback", outcome="fail", detail=str(exc))
         fail_url = append_error_to_redirect_url(redirect_uri=app_redirect_uri, error="google_auth_failed")
         return RedirectResponse(url=fail_url, status_code=302)
-
-    email = claims["email"]
-    user = await db.scalar(select(User).where(User.email == email))
-    if not user:
-        user = User(id=uuid.uuid4(), email=email, password_hash=hash_password(str(uuid.uuid4())))
-        db.add(user)
-        await db.commit()
-
-    token = create_access_token(user_id=str(user.id))
-    audit_event(request=request, event="auth.google.callback", outcome="success", user_id=str(user.id), email=email)
-    success_url = append_token_to_redirect_url(redirect_uri=app_redirect_uri, access_token=token)
-    return RedirectResponse(url=success_url, status_code=302)
 
 
 @router.get("/google/url", response_model=GoogleAuthUrlResponse)
