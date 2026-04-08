@@ -42,12 +42,19 @@ def build_placement_question_prompt(*, level: int, concept: str) -> str:
     )
 
 
-def build_exam_questions_prompt(*, level: int, concepts: list[str]) -> str:
-    concept_text = ", ".join(concepts)
+def build_exam_questions_prompt(
+    *,
+    level: int,
+    taught_concepts: list[str],
+    weak_tags: list[str],
+) -> str:
+    taught_text = ", ".join(taught_concepts) if taught_concepts else "없음"
+    weak_text = ", ".join(weak_tags) if weak_tags else "없음"
     return (
-        "한국 교육과정 수학 정규시험 5문항을 JSON으로만 생성해라.\n"
+        "학생이 실제로 가르친 내용 기반의 수학 정규시험 5문항을 JSON으로만 생성해라.\n"
         f"레벨: {level} (1=초1 ... 9=중3)\n"
-        f"개념 후보: {concept_text}\n"
+        f"학생이 학습한 개념: {taught_text}\n"
+        f"누적 약점 개념(우선 출제): {weak_text}\n"
         "스키마:\n"
         '{"questions":[{"type":"multiple_choice|short_answer","content":"","options":["","","","",""]|null,'
         '"answer_key":"1","concept_tag":"","difficulty":1}]}\n'
@@ -55,6 +62,7 @@ def build_exam_questions_prompt(*, level: int, concepts: list[str]) -> str:
         "- 총 5문항\n"
         "- 객관식 3, 단답형 2\n"
         "- difficulty 1~3\n"
-        "- 객관식 answer_key는 1~5 문자열"
+        "- 객관식 answer_key는 1~5 문자열\n"
+        "- 오직 '학생이 학습한 개념' 범위 안에서만 출제"
     )
 

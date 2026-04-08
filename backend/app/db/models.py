@@ -21,6 +21,52 @@ class User(Base):
     persona: Mapped["Persona"] = relationship(back_populates="user", uselist=False)
 
 
+class Subject(Base):
+    __tablename__ = "subjects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class CurriculumItem(Base):
+    __tablename__ = "curriculum_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    order_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class Stage(Base):
+    __tablename__ = "stages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    order_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    passed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class StageCurriculumItem(Base):
+    __tablename__ = "stage_curriculum_items"
+    __table_args__ = (UniqueConstraint("stage_id", "curriculum_item_id", name="uq_stage_curriculum_item"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    stage_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("stages.id", ondelete="CASCADE"), nullable=False)
+    curriculum_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("curriculum_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+
 class Persona(Base):
     __tablename__ = "personas"
     __table_args__ = (
@@ -31,6 +77,16 @@ class Persona(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    current_stage_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("stages.id"),
+        nullable=True,
+    )
     name: Mapped[str] = mapped_column(String, nullable=False)
     personality: Mapped[str] = mapped_column(
         Enum("curious", "careful", "clumsy", "perfectionist", "steady", name="personality_type"),
@@ -49,6 +105,11 @@ class TeachingSession(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     persona_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("personas.id", ondelete="CASCADE"), nullable=False)
+    curriculum_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("curriculum_items.id"),
+        nullable=True,
+    )
     concept: Mapped[str] = mapped_column(String, nullable=False)
     quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     predicted_retention: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -88,20 +149,13 @@ class PersonaConcept(Base):
     last_taught_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 
-class SessionWeakPoint(Base):
-    __tablename__ = "session_weak_points"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teaching_sessions.id", ondelete="CASCADE"), nullable=False)
-    concept: Mapped[str] = mapped_column(String, nullable=False)
-
-
 class Exam(Base):
     __tablename__ = "exams"
     __table_args__ = (CheckConstraint("level BETWEEN 1 AND 9", name="chk_exams_level"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     persona_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("personas.id", ondelete="CASCADE"), nullable=False)
+    stage_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("stages.id"), nullable=True)
     exam_type: Mapped[str] = mapped_column(Enum("placement", "regular", name="exam_type"), nullable=False)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
     user_score: Mapped[int | None] = mapped_column(Integer, nullable=True)

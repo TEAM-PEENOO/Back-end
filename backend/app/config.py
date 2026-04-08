@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_issuer: str = "my-jeja-backend"
     jwt_audience: str = "my-jeja-app"
+    auth_google_only: bool = False
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+    google_app_redirect_default: str = "http://localhost:19006/google-oauth-callback"
     cors_allow_origins: str = ""
     allowed_hosts: str = "*"
 
@@ -17,6 +22,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-sonnet-latest"
     sentry_dsn: str = ""
+
+    @property
+    def database_url_async(self) -> str:
+        # Railway often provides postgresql:// URLs; SQLAlchemy async needs +asyncpg.
+        if self.database_url.startswith("postgresql://"):
+            return self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return self.database_url
 
     @property
     def cors_origins_list(self) -> list[str]:

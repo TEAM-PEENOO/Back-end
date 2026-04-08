@@ -11,6 +11,7 @@ from app.dashboard.router import router as dashboard_router
 from app.exam.router import router as exam_router
 from app.persona.router import router as persona_router
 from app.placement.router import router as placement_router
+from app.subjects.router import router as subjects_router
 from app.teaching.router import router as teaching_router
 
 
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(subjects_router, prefix="/api/v1")
     app.include_router(persona_router, prefix="/api/v1")
     app.include_router(placement_router, prefix="/api/v1")
     app.include_router(teaching_router, prefix="/api/v1")

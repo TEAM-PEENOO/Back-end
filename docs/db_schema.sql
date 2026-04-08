@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS weak_point_tags (
   last_failed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (persona_id, concept)
 );
+-- Single source of truth for weak points:
+-- - teaching session weak points are upserted here
+-- - exam wrong answers are upserted here
 
 CREATE TABLE IF NOT EXISTS teaching_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -73,12 +76,6 @@ CREATE TABLE IF NOT EXISTS teaching_messages (
   role message_role NOT NULL,
   content TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS session_weak_points (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID NOT NULL REFERENCES teaching_sessions(id) ON DELETE CASCADE,
-  concept TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS exams (
@@ -117,6 +114,8 @@ CREATE TABLE IF NOT EXISTS exam_answers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (question_id, actor)
 );
+-- Application flow requirement:
+-- when a user answer is wrong during grading, upsert weak_point_tags(persona_id, concept)
 
 CREATE INDEX IF NOT EXISTS idx_personas_user_id ON personas(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_persona_created ON teaching_sessions(persona_id, created_at DESC);

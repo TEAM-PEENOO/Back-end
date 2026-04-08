@@ -61,6 +61,270 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+  /auth/google:
+    get:
+      tags: [Auth]
+      summary: Start Google OAuth redirect flow (backend-managed)
+      parameters:
+        - in: query
+          name: redirect_uri
+          required: false
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to Google OAuth consent screen
+  /auth/google/login:
+    get:
+      tags: [Auth]
+      summary: Start Google OAuth redirect flow (frontend-compatible endpoint)
+      parameters:
+        - in: query
+          name: redirecturi
+          required: false
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to Google OAuth consent screen
+    post:
+      tags: [Auth]
+      summary: Login/signup with Google id_token (mobile/web GIS)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleLoginRequest'
+      responses:
+        '200':
+          description: Access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+  /auth/google/callback:
+    get:
+      tags: [Auth]
+      summary: Google OAuth callback endpoint (backend exchanges code and redirects with JWT)
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: state
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect back to app/web with `access_token` in query string
+  /auth/google/url:
+    get:
+      tags: [Auth]
+      summary: Build Google OAuth authorization URL (web redirect flow)
+      responses:
+        '200':
+          description: Authorization URL and state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoogleAuthUrlResponse'
+  /auth/google/code:
+    post:
+      tags: [Auth]
+      summary: Exchange Google auth code and login/signup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleCodeLoginRequest'
+      responses:
+        '200':
+          description: Access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /subjects:
+    get:
+      tags: [Dashboard]
+      summary: List subjects
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Subject list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SubjectOut'
+    post:
+      tags: [Dashboard]
+      summary: Create subject
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubjectCreateRequest'
+      responses:
+        '200':
+          description: Subject created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubjectOut'
+
+  /subjects/{subject_id}/curriculum:
+    get:
+      tags: [Dashboard]
+      summary: List subject curriculum
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: subject_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Curriculum list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CurriculumOut'
+    post:
+      tags: [Dashboard]
+      summary: Create curriculum item
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: subject_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CurriculumCreateRequest'
+      responses:
+        '200':
+          description: Curriculum item created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurriculumOut'
+
+  /subjects/{subject_id}/stages:
+    get:
+      tags: [Dashboard]
+      summary: List stages with exam unlock status
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: subject_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Stage list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StageOut'
+    post:
+      tags: [Dashboard]
+      summary: Create stage
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: subject_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StageCreateRequest'
+      responses:
+        '200':
+          description: Stage created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StageOut'
+
+  /subjects/{subject_id}/stages/{stage_id}/exams:
+    post:
+      tags: [Exam]
+      summary: Create stage exam (unlocked only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: subject_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: stage_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Exam created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateExamResponse'
+        '422':
+          description: Exam locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /persona:
     post:
@@ -438,16 +702,39 @@ components:
       properties:
         email: { type: string, format: email }
         password: { type: string }
+    GoogleLoginRequest:
+      type: object
+      required: [id_token]
+      properties:
+        id_token: { type: string }
+    GoogleCodeLoginRequest:
+      type: object
+      required: [code, redirect_uri]
+      properties:
+        code: { type: string }
+        redirect_uri: { type: string }
+    GoogleAuthUrlResponse:
+      type: object
+      properties:
+        auth_url: { type: string }
+        state: { type: string }
     AuthResponse:
       type: object
       properties:
         access_token: { type: string }
         token_type: { type: string, example: bearer }
+    MeResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time }
     CreatePersonaRequest:
       type: object
       required: [name, personality]
       properties:
         name: { type: string }
+        subject_id: { type: string, format: uuid, nullable: true }
         personality:
           type: string
           enum: [curious, careful, clumsy, perfectionist, steady]
@@ -466,8 +753,56 @@ components:
         personality:
           type: string
           enum: [curious, careful, clumsy, perfectionist, steady]
+        subject_id: { type: string, format: uuid, nullable: true }
+        current_stage_id: { type: string, format: uuid, nullable: true }
         current_level: { type: integer, minimum: 1, maximum: 9 }
         placement_done: { type: boolean }
+    SubjectCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true }
+    SubjectOut:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+    CurriculumCreateRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        note: { type: string, nullable: true }
+        order_index: { type: integer, nullable: true }
+    CurriculumOut:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        subject_id: { type: string, format: uuid }
+        title: { type: string }
+        note: { type: string, nullable: true }
+        order_index: { type: integer }
+    StageCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        order_index: { type: integer, nullable: true }
+        curriculum_item_ids:
+          type: array
+          items: { type: string, format: uuid }
+    StageOut:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        subject_id: { type: string, format: uuid }
+        name: { type: string }
+        order_index: { type: integer }
+        passed: { type: boolean }
+        exam_unlocked: { type: boolean }
+        untaught_count: { type: integer }
     PlacementQuestion:
       type: object
       properties:
@@ -519,6 +854,7 @@ components:
       required: [concept]
       properties:
         concept: { type: string }
+        curriculum_item_id: { type: string, format: uuid, nullable: true }
     CreateTeachingSessionResponse:
       type: object
       properties:

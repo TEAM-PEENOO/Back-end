@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import uuid
 
-from app.db.models import Persona
+from app.db.models import Persona, Subject
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.persona.schemas import CreatePersonaRequest, PersonaResponse, UpdatePersonaRequest
@@ -21,8 +22,20 @@ async def create_persona(
     if existing:
         raise HTTPException(status_code=409, detail="Persona already exists for this user")
 
+    subject_id = None
+    if payload.subject_id:
+        try:
+            parsed_subject_id = uuid.UUID(payload.subject_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid subject_id")
+        subject = await db.scalar(select(Subject).where(Subject.id == parsed_subject_id, Subject.user_id == user_id))
+        if not subject:
+            raise HTTPException(status_code=404, detail="Subject not found")
+        subject_id = subject.id
+
     persona = Persona(
         user_id=user_id,
+        subject_id=subject_id,
         name=payload.name,
         personality=payload.personality,
         subject="math",
@@ -37,6 +50,8 @@ async def create_persona(
         persona_id=str(persona.id),
         name=persona.name,
         personality=persona.personality,
+        subject_id=str(persona.subject_id) if persona.subject_id else None,
+        current_stage_id=str(persona.current_stage_id) if persona.current_stage_id else None,
         current_level=persona.current_level,
         placement_done=persona.placement_done,
     )
@@ -54,6 +69,8 @@ async def get_me(
         persona_id=str(persona.id),
         name=persona.name,
         personality=persona.personality,
+        subject_id=str(persona.subject_id) if persona.subject_id else None,
+        current_stage_id=str(persona.current_stage_id) if persona.current_stage_id else None,
         current_level=persona.current_level,
         placement_done=persona.placement_done,
     )
@@ -80,6 +97,8 @@ async def patch_me(
         persona_id=str(persona.id),
         name=persona.name,
         personality=persona.personality,
+        subject_id=str(persona.subject_id) if persona.subject_id else None,
+        current_stage_id=str(persona.current_stage_id) if persona.current_stage_id else None,
         current_level=persona.current_level,
         placement_done=persona.placement_done,
     )

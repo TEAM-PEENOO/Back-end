@@ -11,7 +11,27 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleLoginRequest(BaseModel):
+    id_token: str = Field(min_length=20)
+
+
+class GoogleCodeLoginRequest(BaseModel):
+    code: str = Field(min_length=10)
+    redirect_uri: str
+
+
+class GoogleAuthUrlResponse(BaseModel):
+    auth_url: str
+    state: str
+
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class MeResponse(BaseModel):
+    id: str
+    email: EmailStr
+    created_at: str
 
