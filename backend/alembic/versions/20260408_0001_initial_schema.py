@@ -20,10 +20,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    personality_type = sa.Enum("curious", "careful", "clumsy", "perfectionist", name="personality_type")
-    message_role = sa.Enum("user", "assistant", name="message_role")
-    exam_type = sa.Enum("placement", "regular", name="exam_type")
-    question_type = sa.Enum("multiple_choice", "short_answer", name="question_type")
+    personality_type = sa.Enum(
+        "curious",
+        "careful",
+        "clumsy",
+        "perfectionist",
+        name="personality_type",
+        create_type=False,
+    )
+    message_role = sa.Enum("user", "assistant", name="message_role", create_type=False)
+    exam_type = sa.Enum("placement", "regular", name="exam_type", create_type=False)
+    question_type = sa.Enum("multiple_choice", "short_answer", name="question_type", create_type=False)
 
     bind = op.get_bind()
     personality_type.create(bind, checkfirst=True)
