@@ -19,6 +19,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS session_weak_points (

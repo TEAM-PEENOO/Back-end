@@ -17,12 +17,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_check_constraint(
-        "chk_exam_answers_actor",
-        "exam_answers",
-        "actor IN ('user','persona')",
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'chk_exam_answers_actor'
+            ) THEN
+                ALTER TABLE exam_answers
+                ADD CONSTRAINT chk_exam_answers_actor
+                CHECK (actor IN ('user','persona'));
+            END IF;
+        END $$;
+        """
     )
 
 
 def downgrade() -> None:
-    op.drop_constraint("chk_exam_answers_actor", "exam_answers", type_="check")
+    op.execute("ALTER TABLE exam_answers DROP CONSTRAINT IF EXISTS chk_exam_answers_actor;")
