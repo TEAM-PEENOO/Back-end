@@ -52,3 +52,12 @@ alembic upgrade head
 - Placement/Exam question generation uses Claude JSON output with deterministic fallback.
 - Security baseline includes Redis rate limiting, JWT issuer/audience validation, security headers, trusted hosts, and structured audit logs.
 - Before deploy, configure `REDIS_URL` and `SENTRY_DSN` in `.env`.
+- Google OAuth login endpoints:
+  - `GET /api/v1/auth/google?redirect_uri=...` (backend-managed redirect flow)
+  - `GET /api/v1/auth/google/callback` (Google callback)
+  - `POST /api/v1/auth/google` (id_token login for mobile/web)
+  - `GET /api/v1/auth/google/url` + `POST /api/v1/auth/google/code` (web redirect flow)
+- For Google-only auth mode set:
+  - `AUTH_GOOGLE_ONLY=true`
+  - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`, `GOOGLE_APP_REDIRECT_DEFAULT`
+- `DATABASE_URL` can be either `postgresql://...` or `postgresql+asyncpg://...` (backend normalizes automatically).

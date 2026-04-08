@@ -3,6 +3,10 @@
 ## 1) Environment Variables
 
 - `DATABASE_URL` (PostgreSQL connection string)
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_OAUTH_REDIRECT_URI` (must be `/api/v1/auth/google/callback` on backend domain)
+- `GOOGLE_APP_REDIRECT_DEFAULT` (frontend callback URL)
 - `REDIS_URL` (rate limit backend)
 - `JWT_SECRET` (strong random secret)
 - `JWT_ISSUER`
@@ -21,13 +25,15 @@
   - `alembic upgrade head`
 - Confirm tables exist:
   - `users`, `personas`, `teaching_sessions`, `teaching_messages`
-  - `persona_concepts`, `session_weak_points`, `weak_point_tags`
+  - `persona_concepts`, `weak_point_tags`
+  - `subjects`, `curriculum_items`, `stages`, `stage_curriculum_items`
   - `exams`, `exam_questions`, `exam_answers`
 
 ## 3) API Health / Security
 
 - `GET /api/v1/health` returns `{ "status": "ok" }`
 - Auth endpoints return JWT
+- `GET /api/v1/auth/me` returns current user profile with Bearer token
 - Validate JWT issuer/audience (`iss`, `aud`) on protected routes
 - Rate limit works:
   - auth endpoints throttled
@@ -46,6 +52,10 @@
 ## 4) Functional Smoke Test
 
 - Register -> login -> create persona
+- Google OAuth redirect flow:
+  - open `/api/v1/auth/google/login?redirecturi=<frontend-callback>`
+  - confirm callback receives `access_token` query param
+  - call `/api/v1/auth/me` successfully
 - Start placement -> answer until completed
 - Create teaching session -> send message -> stream -> finish
 - Create exam -> submit -> receive user/persona/combined score

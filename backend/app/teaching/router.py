@@ -4,15 +4,15 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.client import ClaudeClient
-from app.ai.prompts import build_socratic_system_prompt, build_teaching_evaluator_prompt
+from app.ai.prompts import build_socratic_system_prompt
 from app.common.audit import audit_event
 from app.common.rate_limit import rate_limit
-from app.db.models import Persona, PersonaConcept, SessionWeakPoint, TeachingMessage, TeachingSession, WeakPointTag
+from app.common.weak_points import upsert_weak_point_tag
+from app.db.models import Persona, PersonaConcept, TeachingMessage, TeachingSession
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.personality.profiles import profile_for
@@ -26,7 +26,6 @@ from app.teaching.schemas import (
 
 
 router = APIRouter(prefix="/teaching", tags=["Teaching"])
-claude_client = ClaudeClient()
 
 
 class EvaluationResult(BaseModel):
@@ -35,6 +34,57 @@ class EvaluationResult(BaseModel):
     weak_points: list[str] = Field(default_factory=list)
     next_focus: str
     predicted_retention: float = Field(ge=0.0, le=1.0)
+
+
+def _local_persona_reply(*, personality: str, concept: str, user_text: str) -> str:
+    text = user_text.strip()
+    if not text:
+        return f"{concept}에서 핵심 규칙을 한 문장으로 먼저 알려줄래?"
+
+    prompts = {
+        "curious": "좋아! 그러면 왜 그렇게 되는지 예시 한 개로 더 설명해줄래?",
+        "careful": "내가 이해한 게 맞는지 확인하고 싶어. 핵심만 다시 정리해줄래?",
+        "clumsy": "잠깐 헷갈렸어. 이 부분을 틀리기 쉬운 포인트 기준으로 다시 알려줘!",
+        "perfectionist": "좋아. 예외 케이스 하나랑 기본 케이스 하나를 같이 비교해줄래?",
+        "steady": "천천히 복습하고 싶어. 방금 설명에서 꼭 기억할 한 줄만 알려줘.",
+    }
+    suffix = prompts.get(personality, prompts["careful"])
+    return f"방금 설명 잘 들었어. {suffix}"
+
+
+def _evaluate_session_locally(rows: list[TeachingMessage]) -> EvaluationResult:
+    user_lines = [r for r in rows if r.role == "user"]
+    total_chars = sum(len(r.content) for r in user_lines)
+    asks_question = any("?" in r.content for r in user_lines)
+
+    if total_chars >= 300:
+        score = 90
+    elif total_chars >= 180:
+        score = 80
+    elif total_chars >= 90:
+        score = 70
+    else:
+        score = 60
+
+    weak_points: list[str] = []
+    if len(user_lines) < 2:
+        weak_points.append("설명 반복 부족")
+    if not asks_question:
+        weak_points.append("확인 질문 부족")
+    if total_chars < 120:
+        weak_points.append("예시 밀도 부족")
+
+    grade = "A" if score >= 85 else ("B" if score >= 70 else "C")
+    predicted_retention = max(0.45, min(0.95, score / 100))
+    next_focus = "핵심 규칙 1개와 반례 1개를 함께 설명해보기"
+
+    return EvaluationResult(
+        score=score,
+        grade_label=grade,
+        weak_points=weak_points[:5],
+        next_focus=next_focus,
+        predicted_retention=predicted_retention,
+    )
 
 
 async def _get_user_persona(db: AsyncSession, user_id: str) -> Persona:
@@ -52,7 +102,13 @@ async def create_session(
     db: AsyncSession = Depends(get_db),
 ) -> CreateTeachingSessionResponse:
     persona = await _get_user_persona(db, user_id)
-    session = TeachingSession(persona_id=persona.id, concept=payload.concept)
+    curriculum_item_id = None
+    if payload.curriculum_item_id:
+        try:
+            curriculum_item_id = uuid.UUID(payload.curriculum_item_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid curriculum_item_id")
+    session = TeachingSession(persona_id=persona.id, curriculum_item_id=curriculum_item_id, concept=payload.concept)
     db.add(session)
     await db.commit()
     await db.refresh(session)
@@ -103,23 +159,15 @@ async def stream_ai_turn(
             .order_by(TeachingMessage.created_at.desc())
         )
         user_text = latest_user.content if latest_user else session.concept
-        system_prompt = build_socratic_system_prompt(
+        _ = build_socratic_system_prompt(
             persona_name=persona.name,
             personality=persona.personality,
             concept=session.concept,
         )
-
-        chunks: list[str] = []
-        try:
-            async for token in claude_client.stream_text(system_prompt=system_prompt, user_content=user_text):
-                chunks.append(token)
-                yield "event: token\n"
-                yield f"data: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
-        except Exception:
-            fallback = "좋아. 방금 설명을 한 문장으로 다시 요약해줄래?"
-            chunks = [fallback]
-            yield "event: token\n"
-            yield f"data: {json.dumps({'text': fallback}, ensure_ascii=False)}\n\n"
+        text = _local_persona_reply(personality=persona.personality, concept=session.concept, user_text=user_text)
+        chunks = [text]
+        yield "event: token\n"
+        yield f"data: {json.dumps({'text': text}, ensure_ascii=False)}\n\n"
 
         text = "".join(chunks).strip() or "좋아, 계속 설명해줘."
         db_msg = TeachingMessage(session_id=session.id, role="assistant", content=text, created_at=datetime.now(timezone.utc))
@@ -152,23 +200,7 @@ async def finish_session(
             .order_by(TeachingMessage.created_at.asc())
         )
     ).all()
-    transcript = "\n".join(f"{m.role}: {m.content}" for m in rows)
-
-    eval_prompt = build_teaching_evaluator_prompt(concept=session.concept, transcript=transcript)
-    raw = await claude_client.complete_text(system_prompt=eval_prompt, user_content="JSON only")
-    try:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        parsed = json.loads(raw[start : end + 1] if start != -1 and end != -1 else raw)
-        eval_result = EvaluationResult.model_validate(parsed)
-    except (json.JSONDecodeError, ValidationError, ValueError, TypeError):
-        eval_result = EvaluationResult.model_validate({
-            "score": 80,
-            "grade_label": "A",
-            "weak_points": ["핵심 예시 부족"],
-            "next_focus": "핵심 규칙과 반례를 1개씩 설명해보기",
-            "predicted_retention": 0.75,
-        })
+    eval_result = _evaluate_session_locally(rows)
 
     score = eval_result.score
     grade_label = eval_result.grade_label
@@ -179,17 +211,9 @@ async def finish_session(
     session.quality_score = score
     session.predicted_retention = predicted_retention
 
-    # Persist session weak points + cumulative weak tags
+    # Persist only cumulative weak tags (single source of truth).
     for wp in weak_points:
-        db.add(SessionWeakPoint(session_id=session.id, concept=wp))
-        existing = await db.scalar(
-            select(WeakPointTag).where(WeakPointTag.persona_id == persona.id, WeakPointTag.concept == wp)
-        )
-        if existing:
-            existing.fail_count += 1
-            existing.last_failed_at = datetime.now(timezone.utc)
-        else:
-            db.add(WeakPointTag(persona_id=persona.id, concept=wp, fail_count=1, last_failed_at=datetime.now(timezone.utc)))
+        await upsert_weak_point_tag(db, persona_id=persona.id, concept=wp)
 
     # Update persona concept memory
     profile = profile_for(persona.personality)

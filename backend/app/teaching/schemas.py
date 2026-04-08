@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class CreateTeachingSessionRequest(BaseModel):
     concept: str
+    curriculum_item_id: str | None = None
 
 
 class CreateTeachingSessionResponse(BaseModel):
