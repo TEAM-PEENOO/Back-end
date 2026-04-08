@@ -19,33 +19,38 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "persona_concepts",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("persona_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("concept", sa.String(), nullable=False),
-        sa.Column("taught_count", sa.Integer(), nullable=False),
-        sa.Column("stability", sa.Float(), nullable=False),
-        sa.Column("last_taught_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["persona_id"], ["personas.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("persona_id", "concept", name="uq_persona_concepts_persona_concept"),
-    )
-    op.create_index("idx_persona_concepts_persona", "persona_concepts", ["persona_id"], unique=False)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
 
-    op.create_table(
-        "session_weak_points",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("session_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("concept", sa.String(), nullable=False),
-        sa.ForeignKeyConstraint(["session_id"], ["teaching_sessions.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("idx_session_weak_points_session", "session_weak_points", ["session_id"], unique=False)
+    if not inspector.has_table("persona_concepts"):
+        op.create_table(
+            "persona_concepts",
+            sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column("persona_id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column("concept", sa.String(), nullable=False),
+            sa.Column("taught_count", sa.Integer(), nullable=False),
+            sa.Column("stability", sa.Float(), nullable=False),
+            sa.Column("last_taught_at", sa.DateTime(timezone=True), nullable=False),
+            sa.ForeignKeyConstraint(["persona_id"], ["personas.id"], ondelete="CASCADE"),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint("persona_id", "concept", name="uq_persona_concepts_persona_concept"),
+        )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_persona_concepts_persona ON persona_concepts (persona_id)")
+
+    if not inspector.has_table("session_weak_points"):
+        op.create_table(
+            "session_weak_points",
+            sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column("session_id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column("concept", sa.String(), nullable=False),
+            sa.ForeignKeyConstraint(["session_id"], ["teaching_sessions.id"], ondelete="CASCADE"),
+            sa.PrimaryKeyConstraint("id"),
+        )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_session_weak_points_session ON session_weak_points (session_id)")
 
 
 def downgrade() -> None:
-    op.drop_index("idx_session_weak_points_session", table_name="session_weak_points")
-    op.drop_table("session_weak_points")
-    op.drop_index("idx_persona_concepts_persona", table_name="persona_concepts")
-    op.drop_table("persona_concepts")
+    op.execute("DROP INDEX IF EXISTS idx_session_weak_points_session")
+    op.execute("DROP TABLE IF EXISTS session_weak_points")
+    op.execute("DROP INDEX IF EXISTS idx_persona_concepts_persona")
+    op.execute("DROP TABLE IF EXISTS persona_concepts")
