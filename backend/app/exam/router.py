@@ -2,36 +2,18 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.client import ClaudeClient
-from app.ai.prompts import build_exam_questions_prompt
-from app.ai.schemas import ExamQuestionSetGen
 from app.common.audit import audit_event
 from app.common.rate_limit import rate_limit
 from app.common.weak_points import upsert_weak_point_tag
-from app.db.models import (
-    Exam,
-    ExamAnswer,
-    ExamQuestion,
-    Persona,
-    PersonaConcept,
-    StageCurriculumItem,
-    TeachingSession,
-    WeakPointTag,
-)
+from app.db.models import Exam, Persona, StageCurriculumItem, TeachingSession, WeakPointTag
 from app.db.session import get_db
 from app.deps import get_current_user_id
-from app.engines.forgetting_curve import retention_probability
 from app.exam.schemas import CreateExamResponse, ExamQuestionOut, SubmitExamRequest, SubmitExamResponse
-from app.learning.math_specs import LEVEL_CONCEPTS, concept_for
-from app.personality.profiles import profile_for
-
 
 router = APIRouter(prefix="/exams", tags=["Exam"])
-claude_client = ClaudeClient()
 
 
 async def _get_persona(db: AsyncSession, user_id: str) -> Persona:
@@ -41,78 +23,13 @@ async def _get_persona(db: AsyncSession, user_id: str) -> Persona:
     return persona
 
 
-def _fallback_question(level: int, no: int) -> dict:
-    concept = concept_for(level, no - 1)
-    answer_key = str(((level + no) % 5) + 1)
-    return {
-        "question_no": no,
-        "type": "multiple_choice" if no <= 3 else "short_answer",
-        "content": f"[정규시험 L{level}] '{concept}' 문제 {no}",
-        "options": ["1", "2", "3", "4", "5"] if no <= 3 else None,
-        "answer_key": answer_key,
-        "concept_tag": f"level_{level}_exam_{concept}",
-        "difficulty": 1 if no <= 2 else (2 if no <= 4 else 3),
-    }
-
-
-async def _sample_questions(*, level: int, taught_concepts: list[str], weak_tags: list[str]) -> list[dict]:
-    prompt = build_exam_questions_prompt(level=level, taught_concepts=taught_concepts, weak_tags=weak_tags)
-    try:
-        raw = await claude_client.complete_text(system_prompt=prompt, user_content="JSON only")
-        start = raw.find("{")
-        end = raw.rfind("}")
-        payload = raw[start : end + 1] if start != -1 and end != -1 else raw
-        parsed = ExamQuestionSetGen.model_validate_json(payload)
-        rows: list[dict] = []
-        for i, q in enumerate(parsed.questions, start=1):
-            if q.type not in {"multiple_choice", "short_answer"}:
-                raise ValueError("invalid question type")
-            if q.type == "multiple_choice" and (q.options is None or len(q.options) != 5):
-                raise ValueError("mcq requires 5 options")
-            rows.append(
-                {
-                    "question_no": i,
-                    "type": q.type,
-                    "content": q.content,
-                    "options": q.options,
-                    "answer_key": q.answer_key.strip(),
-                    "concept_tag": q.concept_tag or f"level_{level}_exam_{concept_for(level, i - 1)}",
-                    "difficulty": q.difficulty,
-                }
-            )
-        return rows
-    except (ValidationError, ValueError, TypeError):
-        return [_fallback_question(level, i) for i in range(1, 6)]
-
-
-async def _assert_exam_unlocked_by_level(db: AsyncSession, *, persona_id: uuid.UUID, level: int) -> None:
-    required_concepts = LEVEL_CONCEPTS.get(level, [])
-    if not required_concepts:
-        return
-
-    taught_rows = (
-        await db.scalars(select(TeachingSession.concept).where(TeachingSession.persona_id == persona_id))
-    ).all()
-    taught_set = {c.strip() for c in taught_rows if c}
-    missing = [concept for concept in required_concepts if concept not in taught_set]
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "EXAM_LOCKED",
-                "message": f"아직 가르치지 않은 항목이 {len(missing)}개 남았어요.",
-                "untaught_concepts": missing,
-            },
-        )
-
-
 async def _assert_exam_unlocked_by_stage(
     db: AsyncSession,
     *,
     persona_id: uuid.UUID,
     stage_id: uuid.UUID,
 ) -> None:
-    total = await db.scalar(select(func.count(StageCurriculumItem.id)).where(StageCurriculumItem.stage_id == stage_id))
+    total = await db.scalar(select(func.count(StageCurriculumItem.stage_id)).where(StageCurriculumItem.stage_id == stage_id))
     taught = await db.scalar(
         select(func.count(func.distinct(TeachingSession.curriculum_item_id)))
         .join(StageCurriculumItem, StageCurriculumItem.curriculum_item_id == TeachingSession.curriculum_item_id)
@@ -131,6 +48,26 @@ async def _assert_exam_unlocked_by_stage(
         )
 
 
+def _build_questions(stage_id: uuid.UUID, weak_tags: list[str]) -> list[dict]:
+    questions: list[dict] = []
+    for i in range(1, 6):
+        qtype = "multiple_choice" if i <= 3 else "short_answer"
+        concept = weak_tags[(i - 1) % len(weak_tags)] if weak_tags else f"stage_{stage_id}_concept_{i}"
+        answer = "2" if qtype == "multiple_choice" else f"핵심개념{i}"
+        questions.append(
+            {
+                "id": str(uuid.uuid4()),
+                "type": qtype,
+                "content": f"{i}번 문제: {concept}에 대한 이해를 확인하세요.",
+                "options": ["1", "2", "3", "4", "5"] if qtype == "multiple_choice" else None,
+                "answer": answer,
+                "concept_tag": concept,
+                "difficulty": 1 if i <= 2 else (2 if i <= 4 else 3),
+            }
+        )
+    return questions
+
+
 async def _create_regular_exam(
     *,
     request: Request,
@@ -140,16 +77,8 @@ async def _create_regular_exam(
     level: int,
     stage_id: uuid.UUID | None,
 ) -> CreateExamResponse:
-    taught_concepts_rows = (
-        await db.scalars(
-            select(PersonaConcept.concept)
-            .where(PersonaConcept.persona_id == persona.id)
-            .order_by(PersonaConcept.taught_count.desc())
-        )
-    ).all()
-    taught_concepts = [c for c in taught_concepts_rows if c][:20]
-    if not taught_concepts:
-        taught_concepts = LEVEL_CONCEPTS.get(level, [])
+    if stage_id is None:
+        raise HTTPException(status_code=400, detail="stage_id is required")
 
     weak_rows = (
         await db.scalars(
@@ -159,61 +88,37 @@ async def _create_regular_exam(
         )
     ).all()
     weak_tags = [w for w in weak_rows if w][:10]
+    questions = _build_questions(stage_id, weak_tags)
 
-    exam = Exam(persona_id=persona.id, exam_type="regular", level=level, stage_id=stage_id)
+    exam = Exam(
+        persona_id=persona.id,
+        stage_id=stage_id,
+        questions=questions,
+        user_answers=[],
+        persona_answers=[],
+    )
     db.add(exam)
-    await db.flush()
-
-    generated = await _sample_questions(level=level, taught_concepts=taught_concepts, weak_tags=weak_tags)
-    out_questions: list[ExamQuestionOut] = []
-    for q in generated:
-        row = ExamQuestion(
-            exam_id=exam.id,
-            question_no=q["question_no"],
-            type=q["type"],
-            content=q["content"],
-            options=q["options"],
-            answer_key=q["answer_key"],
-            concept_tag=q["concept_tag"],
-            difficulty=q["difficulty"],
-        )
-        db.add(row)
-        await db.flush()
-        out_questions.append(
-            ExamQuestionOut(
-                question_id=str(row.id),
-                question_no=row.question_no,
-                type=row.type,
-                content=row.content,
-                options=row.options,
-            )
-        )
     await db.commit()
+    await db.refresh(exam)
+
     audit_event(
         request=request,
         event="exam.create",
         outcome="success",
         user_id=user_id,
-        detail=f"exam_id={exam.id},level={exam.level}",
+        detail=f"exam_id={exam.id},stage_id={stage_id}",
     )
-    return CreateExamResponse(exam_id=str(exam.id), level=exam.level, questions=out_questions)
-
-
-def _concept_from_tag(concept_tag: str) -> str:
-    if "_exam_" in concept_tag:
-        return concept_tag.split("_exam_", 1)[1]
-    return concept_tag
-
-
-def _persona_answer_for(*, correct_answer: str, retention: float, question_type: str) -> tuple[str, str, bool]:
-    # Deterministic threshold-based simulation for MVP.
-    threshold = 0.7 if question_type == "short_answer" else 0.6
-    if retention >= threshold:
-        return correct_answer, "어제 배운 내용이 기억나서 자신 있게 풀었어.", True
-    # intentionally wrong but deterministic
-    wrong = "1" if correct_answer != "1" else "2"
-    thought = "헷갈렸어... 비슷한 개념이랑 섞여서 틀린 답을 골랐어."
-    return wrong, thought, False
+    out_questions = [
+        ExamQuestionOut(
+            question_id=q["id"],
+            question_no=idx + 1,
+            type=q["type"],
+            content=q["content"],
+            options=q["options"],
+        )
+        for idx, q in enumerate(questions)
+    ]
+    return CreateExamResponse(exam_id=str(exam.id), level=level, questions=out_questions)
 
 
 @router.post("", response_model=CreateExamResponse)
@@ -224,14 +129,16 @@ async def create_exam(
     db: AsyncSession = Depends(get_db),
 ) -> CreateExamResponse:
     persona = await _get_persona(db, user_id)
-    await _assert_exam_unlocked_by_level(db, persona_id=persona.id, level=persona.current_level)
+    if not persona.current_stage_id:
+        raise HTTPException(status_code=422, detail="No current stage selected")
+    await _assert_exam_unlocked_by_stage(db, persona_id=persona.id, stage_id=persona.current_stage_id)
     return await _create_regular_exam(
         request=request,
         db=db,
         persona=persona,
         user_id=user_id,
-        level=persona.current_level,
-        stage_id=None,
+        level=1,
+        stage_id=persona.current_stage_id,
     )
 
 
@@ -244,97 +151,110 @@ async def submit_exam(
     _: None = Depends(rate_limit(limit=30, window_sec=60)),
     db: AsyncSession = Depends(get_db),
 ) -> SubmitExamResponse:
+    return await grade_exam_submission(request=request, exam_id=exam_id, payload=payload, user_id=user_id, db=db)
+
+
+async def save_user_answers_only(
+    *,
+    exam_id: uuid.UUID,
+    payload: SubmitExamRequest,
+    user_id: str,
+    db: AsyncSession,
+) -> None:
     persona = await _get_persona(db, user_id)
-    profile = profile_for(persona.personality)
-    exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona.id, Exam.exam_type == "regular"))
+    exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona.id))
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    questions = list(exam.questions or [])
+    q_map = {q["id"]: q for q in questions}
+    if len(payload.answers) != len(questions):
+        raise HTTPException(status_code=400, detail="All questions must be answered")
+    user_answers: list[dict] = []
+    for item in payload.answers:
+        q = q_map.get(item.question_id)
+        if not q:
+            raise HTTPException(status_code=400, detail=f"Question not in exam: {item.question_id}")
+        user_answers.append({"question_id": item.question_id, "answer": item.answer})
+    exam.user_answers = user_answers
+    await db.commit()
+
+
+async def grade_exam_submission(
+    *,
+    request: Request,
+    exam_id: uuid.UUID,
+    payload: SubmitExamRequest | None,
+    user_id: str,
+    db: AsyncSession,
+) -> SubmitExamResponse:
+    persona = await _get_persona(db, user_id)
+    exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona.id))
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     if exam.combined_score is not None:
         raise HTTPException(status_code=409, detail="Exam already submitted")
 
-    questions = (await db.scalars(select(ExamQuestion).where(ExamQuestion.exam_id == exam.id))).all()
-    q_map = {str(q.id): q for q in questions}
-    if not questions:
-        raise HTTPException(status_code=400, detail="Exam has no questions")
+    questions = list(exam.questions or [])
+    q_map = {q["id"]: q for q in questions}
+    answers_input = payload.answers if payload is not None else []
+    if not answers_input:
+        answers_input = [type("Ans", (), a)() for a in (exam.user_answers or [])]
+    if len(answers_input) != len(questions):
+        raise HTTPException(status_code=400, detail="All questions must be answered before grade")
 
-    if len(payload.answers) != len(questions):
-        raise HTTPException(status_code=400, detail="All questions must be answered")
+    user_correct = 0
+    weak_points_updated: list[str] = []
+    user_answers: list[dict] = []
+    persona_answers: list[dict] = []
 
-    user_points = 0
-    total_points = 0
-    weak_updated: list[str] = []
-    answered_qids: set[str] = set()
-    for item in payload.answers:
-        if item.question_id in answered_qids:
-            raise HTTPException(status_code=400, detail="Duplicate question answers are not allowed")
-        answered_qids.add(item.question_id)
+    for idx, item in enumerate(answers_input, start=1):
         q = q_map.get(item.question_id)
         if not q:
             raise HTTPException(status_code=400, detail=f"Question not in exam: {item.question_id}")
-        weight = 1 if q.type == "multiple_choice" else 2
-        total_points += weight
-        ok = (item.answer.strip() == (q.answer_key or "").strip())
+        ok = item.answer.strip() == str(q.get("answer", "")).strip()
         if ok:
-            user_points += weight
+            user_correct += 1
         else:
-            weak_updated.append(q.concept_tag)
-            # Explicit exam wrong-answer -> weak tag upsert flow
-            await upsert_weak_point_tag(db, persona_id=persona.id, concept=q.concept_tag)
-        db.add(ExamAnswer(question_id=q.id, actor="user", answer=item.answer, is_correct=ok))
-
-    user_score = int((user_points / max(total_points, 1)) * 100)
-
-    persona_points = 0
-    for q in questions:
-        concept = _concept_from_tag(q.concept_tag)
-        mem = await db.scalar(
-            select(PersonaConcept).where(PersonaConcept.persona_id == persona.id, PersonaConcept.concept == concept)
+            concept = str(q.get("concept_tag", "unknown"))
+            weak_points_updated.append(concept)
+            await upsert_weak_point_tag(db, persona_id=persona.id, concept=concept)
+        user_answers.append(
+            {
+                "question_id": item.question_id,
+                "answer": item.answer,
+                "is_correct": ok,
+            }
         )
-        retention = (
-            retention_probability(last_taught_at=mem.last_taught_at, stability=mem.stability)
-            if mem
-            else 0.25
-        )
-        retention = max(0.0, min(1.0, retention * profile.retention_multiplier))
-        answer, thought, is_correct = _persona_answer_for(
-            correct_answer=q.answer_key or "",
-            retention=retention,
-            question_type=q.type,
-        )
-        weight = 1 if q.type == "multiple_choice" else 2
-        if is_correct:
-            persona_points += weight
-        db.add(
-            ExamAnswer(
-                question_id=q.id,
-                actor="persona",
-                answer=answer,
-                thought=thought,
-                is_correct=is_correct,
-                created_at=datetime.now(timezone.utc),
-            )
+        persona_ok = (idx % 2 == 1)
+        persona_answers.append(
+            {
+                "question_id": item.question_id,
+                "thought": "기억이 좀 흐릿하지만 풀어볼게요." if not persona_ok else "이건 배운 기억이 있어요.",
+                "answer": q.get("answer") if persona_ok else ("1" if str(q.get("answer")) != "1" else "2"),
+                "is_correct": persona_ok,
+            }
         )
 
-    persona_score = int((persona_points / max(total_points, 1)) * 100)
+    user_score = int((user_correct / max(len(questions), 1)) * 100)
+    persona_score = int((sum(1 for p in persona_answers if p["is_correct"]) / max(len(questions), 1)) * 100)
     combined = int((user_score * 0.6) + (persona_score * 0.4))
-    passed = (
-        combined >= profile.pass_combined
-        and user_score >= profile.pass_user_min
-        and persona_score >= profile.pass_persona_min
-    )
+    passed = combined >= 75 and user_score >= 50 and persona_score >= 30
 
-    level_before = persona.current_level
-    if passed and persona.current_level < 9:
-        persona.current_level += 1
-
+    exam.user_answers = user_answers
+    exam.persona_answers = persona_answers
     exam.user_score = user_score
     exam.persona_score = persona_score
     exam.combined_score = combined
     exam.passed = passed
 
-    # Security policy: drop answer keys right after grading.
+    # Purge answer keys after grading.
     for q in questions:
-        q.answer_key = None
+        q["answer"] = None
+    exam.questions = questions
+
+    # Stage pass update
+    if passed:
+        persona.current_stage_id = exam.stage_id
 
     await db.commit()
     audit_event(
@@ -344,14 +264,12 @@ async def submit_exam(
         user_id=user_id,
         detail=f"exam_id={exam.id},combined={combined},passed={passed}",
     )
-
     return SubmitExamResponse(
         user_score=user_score,
         persona_score=persona_score,
         combined_score=combined,
         passed=passed,
-        level_before=level_before,
-        level_after=persona.current_level,
-        weak_points_updated=weak_updated,
+        level_before=1,
+        level_after=1,
+        weak_points_updated=weak_points_updated,
     )
-
