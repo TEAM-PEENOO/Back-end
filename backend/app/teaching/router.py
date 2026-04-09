@@ -12,7 +12,7 @@ from app.ai.prompts import build_socratic_system_prompt
 from app.common.audit import audit_event
 from app.common.rate_limit import rate_limit
 from app.common.weak_points import upsert_weak_point_tag
-from app.db.models import Persona, PersonaConcept, TeachingMessage, TeachingSession
+from app.db.models import Persona, PersonaConcept, TeachingSession
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.personality.profiles import profile_for
@@ -52,10 +52,10 @@ def _local_persona_reply(*, personality: str, concept: str, user_text: str) -> s
     return f"방금 설명 잘 들었어. {suffix}"
 
 
-def _evaluate_session_locally(rows: list[TeachingMessage]) -> EvaluationResult:
-    user_lines = [r for r in rows if r.role == "user"]
-    total_chars = sum(len(r.content) for r in user_lines)
-    asks_question = any("?" in r.content for r in user_lines)
+def _evaluate_session_locally(rows: list[dict]) -> EvaluationResult:
+    user_lines = [r for r in rows if r.get("role") == "user"]
+    total_chars = sum(len(str(r.get("content", ""))) for r in user_lines)
+    asks_question = any("?" in str(r.get("content", "")) for r in user_lines)
 
     if total_chars >= 300:
         score = 90
@@ -134,8 +134,15 @@ async def add_message(
     if not session or session.persona_id != persona.id:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    msg = TeachingMessage(session_id=session.id, role="user", content=payload.content)
-    db.add(msg)
+    messages = list(session.messages or [])
+    messages.append(
+        {
+            "role": "user",
+            "content": payload.content,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    session.messages = messages
     await db.commit()
     return OkResponse(ok=True)
 
@@ -153,12 +160,8 @@ async def stream_ai_turn(
         raise HTTPException(status_code=404, detail="Session not found")
 
     async def event_gen():
-        latest_user = await db.scalar(
-            select(TeachingMessage)
-            .where(TeachingMessage.session_id == session.id, TeachingMessage.role == "user")
-            .order_by(TeachingMessage.created_at.desc())
-        )
-        user_text = latest_user.content if latest_user else session.concept
+        latest_user = next((m for m in reversed(list(session.messages or [])) if m.get("role") == "user"), None)
+        user_text = str(latest_user.get("content")) if latest_user else session.concept
         _ = build_socratic_system_prompt(
             persona_name=persona.name,
             personality=persona.personality,
@@ -170,8 +173,15 @@ async def stream_ai_turn(
         yield f"data: {json.dumps({'text': text}, ensure_ascii=False)}\n\n"
 
         text = "".join(chunks).strip() or "좋아, 계속 설명해줘."
-        db_msg = TeachingMessage(session_id=session.id, role="assistant", content=text, created_at=datetime.now(timezone.utc))
-        db.add(db_msg)
+        messages = list(session.messages or [])
+        messages.append(
+            {
+                "role": "assistant",
+                "content": text,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        session.messages = messages
         await db.commit()
 
         yield "event: done\n"
@@ -193,13 +203,7 @@ async def finish_session(
     if not session or session.persona_id != persona.id:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    rows = (
-        await db.scalars(
-            select(TeachingMessage)
-            .where(TeachingMessage.session_id == session.id)
-            .order_by(TeachingMessage.created_at.asc())
-        )
-    ).all()
+    rows = list(session.messages or [])
     eval_result = _evaluate_session_locally(rows)
 
     score = eval_result.score
@@ -209,7 +213,10 @@ async def finish_session(
     predicted_retention = eval_result.predicted_retention
 
     session.quality_score = score
-    session.predicted_retention = predicted_retention
+    session.weak_points = weak_points
+    session.summary_generated = True
+    # Prevent token blow-up: keep only short recent context.
+    session.messages = (session.messages or [])[-12:]
 
     # Persist only cumulative weak tags (single source of truth).
     for wp in weak_points:
