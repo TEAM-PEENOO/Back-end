@@ -1,6 +1,9 @@
+import json
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +23,6 @@ from app.deps import get_current_user_id
 from app.exam.router import (
     _assert_exam_unlocked_by_stage,
     _create_regular_exam,
-    _get_persona,
     grade_exam_submission,
     save_user_answers_only,
 )
@@ -36,10 +38,6 @@ from app.subjects.schemas import (
     SubjectOut,
 )
 from app.teaching.schemas import CreateTeachingSessionRequest, CreateTeachingSessionResponse, MessageRequest, TeachingResultResponse
-from app.teaching.router import add_message as teaching_add_message
-from app.teaching.router import create_session as teaching_create_session
-from app.teaching.router import finish_session as teaching_finish_session
-from app.teaching.router import stream_ai_turn as teaching_stream_ai_turn
 
 router = APIRouter(prefix="/subjects", tags=["Subjects"])
 
@@ -166,9 +164,9 @@ async def create_subject_persona(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     subject = await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    existing = await db.scalar(select(Persona).where(Persona.user_id == user_id))
+    existing = await db.scalar(select(Persona).where(Persona.subject_id == subject.id))
     if existing:
-        raise HTTPException(status_code=409, detail="Persona already exists for this user")
+        raise HTTPException(status_code=409, detail="Persona already exists for this subject")
 
     # Path param is authoritative for subject binding; reject mismatched body value.
     if payload.subject_id and payload.subject_id != str(subject_id):
@@ -259,14 +257,18 @@ async def create_subject_session(
     db: AsyncSession = Depends(get_db),
 ) -> CreateTeachingSessionResponse:
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
-    class _Req:
-        state = type("obj", (), {"request_id": None})()
-        headers = {}
-        url = None
-        method = "POST"
-        client = None
-    return await teaching_create_session(_Req(), payload, user_id, db)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
+    curriculum_item_id = None
+    if payload.curriculum_item_id:
+        try:
+            curriculum_item_id = uuid.UUID(payload.curriculum_item_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid curriculum_item_id")
+    session = TeachingSession(persona_id=persona.id, curriculum_item_id=curriculum_item_id, concept=payload.concept)
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    return CreateTeachingSessionResponse(session_id=str(session.id))
 
 
 @router.post("/{subject_id}/persona/sessions/{session_id}/chat")
@@ -278,9 +280,37 @@ async def subject_session_chat(
     db: AsyncSession = Depends(get_db),
 ):
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
-    await teaching_add_message(session_id, payload, user_id, db)
-    return await teaching_stream_ai_turn(session_id, user_id, None, db)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
+    session = await db.scalar(select(TeachingSession).where(TeachingSession.id == session_id, TeachingSession.persona_id == persona.id))
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    messages = list(session.messages or [])
+    messages.append({"role": "user", "content": payload.content, "timestamp": datetime.now(timezone.utc).isoformat()})
+    session.messages = messages
+    await db.commit()
+
+    reply = "좋아, 방금 설명한 내용을 예시 하나로 다시 말해줄래?"
+    if persona.personality == "curious":
+        reply = "좋아! 왜 그렇게 되는지 한 번 더 설명해줄래?"
+    elif persona.personality == "careful":
+        reply = "내가 이해한 게 맞는지 핵심만 천천히 다시 정리해줄래?"
+    elif persona.personality == "clumsy":
+        reply = "헷갈렸어. 틀리기 쉬운 포인트를 같이 설명해줄래?"
+    elif persona.personality == "perfectionist":
+        reply = "좋아. 예외 케이스 하나도 같이 설명해줄래?"
+
+    async def event_gen():
+        yield "event: token\n"
+        yield f"data: {json.dumps({'text': reply}, ensure_ascii=False)}\n\n"
+        messages2 = list(session.messages or [])
+        messages2.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
+        session.messages = messages2
+        await db.commit()
+        yield "event: done\n"
+        yield "data: {}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 @router.post("/{subject_id}/persona/sessions/{session_id}/end", response_model=TeachingResultResponse)
@@ -291,14 +321,31 @@ async def subject_session_end(
     db: AsyncSession = Depends(get_db),
 ) -> TeachingResultResponse:
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
-    class _Req:
-        state = type("obj", (), {"request_id": None})()
-        headers = {}
-        url = None
-        method = "POST"
-        client = None
-    return await teaching_finish_session(_Req(), session_id, user_id, None, db)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
+    session = await db.scalar(select(TeachingSession).where(TeachingSession.id == session_id, TeachingSession.persona_id == persona.id))
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    user_msgs = [m for m in (session.messages or []) if m.get("role") == "user"]
+    total_chars = sum(len(str(m.get("content", ""))) for m in user_msgs)
+    score = 90 if total_chars >= 300 else (80 if total_chars >= 180 else (70 if total_chars >= 90 else 60))
+    weak_points = []
+    if len(user_msgs) < 2:
+        weak_points.append("설명 반복 부족")
+    if not any("?" in str(m.get("content", "")) for m in user_msgs):
+        weak_points.append("확인 질문 부족")
+    if total_chars < 120:
+        weak_points.append("예시 밀도 부족")
+    session.quality_score = score
+    session.weak_points = weak_points[:5]
+    session.summary_generated = True
+    await db.commit()
+    grade = "A" if score >= 85 else ("B" if score >= 70 else "C")
+    return TeachingResultResponse(
+        score=score,
+        grade_label=grade,
+        weak_points=weak_points[:5],
+        next_focus="핵심 규칙 1개와 반례 1개를 함께 설명해보기",
+    )
 
 
 @router.get("/{subject_id}/persona/weak-points")
@@ -778,7 +825,7 @@ async def list_stages(
     db: AsyncSession = Depends(get_db),
 ) -> list[StageOut]:
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    persona = await _get_persona(db, user_id)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
     taught_item_set = set(
         (
             await db.scalars(
@@ -843,7 +890,7 @@ async def get_stage(
     db: AsyncSession = Depends(get_db),
 ) -> StageOut:
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    persona = await _get_persona(db, user_id)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
     stage = await db.scalar(select(Stage).where(Stage.id == stage_id, Stage.subject_id == subject_id))
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
@@ -1022,7 +1069,7 @@ async def create_stage_exam(
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
 
-    persona = await _get_persona(db, user_id)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
     if persona.subject_id and persona.subject_id != subject.id:
         raise HTTPException(status_code=403, detail="Persona is bound to another subject")
     await _assert_exam_unlocked_by_stage(db, persona_id=persona.id, stage_id=stage.id)
