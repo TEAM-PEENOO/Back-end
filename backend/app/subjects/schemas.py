@@ -6,10 +6,19 @@ class SubjectCreateRequest(BaseModel):
     description: str | None = None
 
 
+class PersonaSummaryOut(BaseModel):
+    id: str
+    name: str
+    personality: str
+    current_stage_id: str | None = None
+
+
 class SubjectOut(BaseModel):
     id: str
     name: str
     description: str | None = None
+    created_at: str
+    persona: PersonaSummaryOut | None = None
 
 
 class CurriculumCreateRequest(BaseModel):
