@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import CurriculumItem, Stage, StageCurriculumItem, Subject, TeachingSession
+from app.db.models import CurriculumItem, Persona, Stage, StageCurriculumItem, Subject, TeachingSession
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.exam.router import _assert_exam_unlocked_by_stage, _create_regular_exam, _get_persona
@@ -12,6 +12,7 @@ from app.exam.schemas import CreateExamResponse
 from app.subjects.schemas import (
     CurriculumCreateRequest,
     CurriculumOut,
+    PersonaSummaryOut,
     StageCreateRequest,
     StageOut,
     SubjectCreateRequest,
@@ -34,7 +35,25 @@ async def list_subjects(
     db: AsyncSession = Depends(get_db),
 ) -> list[SubjectOut]:
     rows = (await db.scalars(select(Subject).where(Subject.user_id == user_id).order_by(Subject.created_at.asc()))).all()
-    return [SubjectOut(id=str(r.id), name=r.name, description=r.description) for r in rows]
+    persona = await db.scalar(select(Persona).where(Persona.user_id == uuid.UUID(user_id)))
+    result: list[SubjectOut] = []
+    for r in rows:
+        persona_out: PersonaSummaryOut | None = None
+        if persona and persona.subject_id == r.id:
+            persona_out = PersonaSummaryOut(
+                id=str(persona.id),
+                name=persona.name,
+                personality=persona.personality,
+                current_stage_id=str(persona.current_stage_id) if persona.current_stage_id else None,
+            )
+        result.append(SubjectOut(
+            id=str(r.id),
+            name=r.name,
+            description=r.description,
+            created_at=r.created_at.isoformat(),
+            persona=persona_out,
+        ))
+    return result
 
 
 @router.post("", response_model=SubjectOut)
@@ -47,7 +66,7 @@ async def create_subject(
     db.add(row)
     await db.commit()
     await db.refresh(row)
-    return SubjectOut(id=str(row.id), name=row.name, description=row.description)
+    return SubjectOut(id=str(row.id), name=row.name, description=row.description, created_at=row.created_at.isoformat(), persona=None)
 
 
 @router.get("/{subject_id}/curriculum", response_model=list[CurriculumOut])
