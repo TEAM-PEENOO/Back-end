@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     jwt_audience: str = "my-jeja-app"
     auth_google_only: bool = False
     google_client_id: str = ""
+    google_client_ids: str = ""
     google_client_secret: str = ""
     google_oauth_redirect_uri: str = ""
     google_app_redirect_default: str = "http://localhost:19006/google-oauth-callback"
@@ -41,6 +42,22 @@ class Settings(BaseSettings):
         if not self.allowed_hosts.strip():
             return ["*"]
         return [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
+
+    @property
+    def google_client_id_list(self) -> list[str]:
+        ids: list[str] = []
+        if self.google_client_id.strip():
+            ids.append(self.google_client_id.strip())
+        if self.google_client_ids.strip():
+            ids.extend([i.strip() for i in self.google_client_ids.split(",") if i.strip()])
+        # De-duplicate while preserving order.
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in ids:
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
 
 
 settings = Settings()

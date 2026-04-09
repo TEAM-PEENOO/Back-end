@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import base64
 import json
+import uuid
 from urllib.parse import urlencode
 from urllib.parse import parse_qsl, urlparse, urlunparse
 
@@ -11,7 +12,8 @@ from passlib.context import CryptContext
 from app.config import settings
 
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Use pbkdf2 only to avoid bcrypt backend runtime issues in deployment.
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
@@ -19,7 +21,15 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+    try:
+        return pwd_context.verify(password, password_hash)
+    except Exception:
+        return False
+
+
+def build_unusable_password_hash() -> str:
+    # OAuth-only users don't need a local password hash.
+    return f"!oauth-only:{uuid.uuid4()}"
 
 
 def create_access_token(*, user_id: str, expires_minutes: int = 60 * 24 * 7) -> str:
@@ -35,7 +45,8 @@ def create_access_token(*, user_id: str, expires_minutes: int = 60 * 24 * 7) -> 
 
 
 async def verify_google_id_token(id_token: str) -> dict[str, str]:
-    if not settings.google_client_id:
+    allowed_client_ids = settings.google_client_id_list
+    if not allowed_client_ids:
         raise ValueError("GOOGLE_CLIENT_ID is not configured")
 
     try:
@@ -50,7 +61,9 @@ async def verify_google_id_token(id_token: str) -> dict[str, str]:
         raise ValueError("Invalid Google id_token")
 
     payload = resp.json()
-    if payload.get("aud") != settings.google_client_id:
+    token_aud = payload.get("aud")
+    token_azp = payload.get("azp")
+    if token_aud not in allowed_client_ids and token_azp not in allowed_client_ids:
         raise ValueError("Google token audience mismatch")
     if payload.get("email_verified") not in {"true", True}:
         raise ValueError("Google email not verified")
@@ -98,7 +111,19 @@ async def exchange_google_code_for_id_token(*, code: str, redirect_uri: str) -> 
     except httpx.HTTPError as exc:
         raise ValueError(f"Google token exchange request failed: {exc!s}")
     if resp.status_code != 200:
-        raise ValueError(f"Failed to exchange authorization code: status={resp.status_code}")
+        detail = ""
+        try:
+            payload = resp.json()
+            # Typical Google payload includes error and error_description fields.
+            err = payload.get("error")
+            err_desc = payload.get("error_description")
+            if err or err_desc:
+                detail = f" error={err!s} desc={err_desc!s}"
+        except Exception:
+            text = resp.text.strip()
+            if text:
+                detail = f" body={text[:200]}"
+        raise ValueError(f"Failed to exchange authorization code: status={resp.status_code}{detail}")
     id_token = resp.json().get("id_token")
     if not id_token:
         raise ValueError("Google response missing id_token")

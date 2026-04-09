@@ -4,6 +4,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.schemas import (
@@ -18,6 +19,7 @@ from app.auth.schemas import (
 from app.auth.service import (
     append_error_to_redirect_url,
     append_token_to_redirect_url,
+    build_unusable_password_hash,
     build_google_oauth_url,
     create_access_token,
     decode_oauth_state,
@@ -36,6 +38,24 @@ from app.deps import get_current_user_id
 
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+async def _get_or_create_google_user(db: AsyncSession, *, email: str) -> User:
+    user = await db.scalar(select(User).where(User.email == email))
+    if user:
+        return user
+    user = User(id=uuid.uuid4(), email=email, password_hash=build_unusable_password_hash())
+    db.add(user)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Another request may have created the same user concurrently.
+        await db.rollback()
+        user = await db.scalar(select(User).where(User.email == email))
+        if user:
+            return user
+        raise
+    return user
 
 
 @router.post("/register", response_model=AuthResponse)
@@ -111,12 +131,7 @@ async def google_login(
         raise HTTPException(status_code=401, detail="Invalid Google token")
 
     email = claims["email"]
-    user = await db.scalar(select(User).where(User.email == email))
-    if not user:
-        # Password is unused in google-only flow but column is required.
-        user = User(id=uuid.uuid4(), email=email, password_hash=hash_password(str(uuid.uuid4())))
-        db.add(user)
-        await db.commit()
+    user = await _get_or_create_google_user(db, email=email)
 
     token = create_access_token(user_id=str(user.id))
     audit_event(request=request, event="auth.google", outcome="success", user_id=str(user.id), email=email)
@@ -146,22 +161,39 @@ async def google_oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     app_redirect_uri = decode_oauth_state(state) or settings.google_app_redirect_default
+    if not app_redirect_uri:
+        # Last-resort guard to avoid empty redirect targets.
+        app_redirect_uri = "https://peenoo.netlify.app/auth/callback"
     try:
-        id_token = await exchange_google_code_for_id_token(code=code, redirect_uri=settings.google_oauth_redirect_uri)
-        claims = await verify_google_id_token(id_token)
+        try:
+            id_token = await exchange_google_code_for_id_token(code=code, redirect_uri=settings.google_oauth_redirect_uri)
+        except ValueError as exc:
+            audit_event(request=request, event="auth.google.callback", outcome="fail", detail=f"exchange_failed: {exc}")
+            fail_url = append_error_to_redirect_url(redirect_uri=app_redirect_uri, error="google_exchange_failed")
+            return RedirectResponse(url=fail_url, status_code=302)
+
+        try:
+            claims = await verify_google_id_token(id_token)
+        except ValueError as exc:
+            audit_event(request=request, event="auth.google.callback", outcome="fail", detail=f"token_invalid: {exc}")
+            fail_url = append_error_to_redirect_url(redirect_uri=app_redirect_uri, error="google_token_invalid")
+            return RedirectResponse(url=fail_url, status_code=302)
 
         email = claims["email"]
-        user = await db.scalar(select(User).where(User.email == email))
-        if not user:
-            user = User(id=uuid.uuid4(), email=email, password_hash=hash_password(str(uuid.uuid4())))
-            db.add(user)
-            await db.commit()
+        try:
+            user = await _get_or_create_google_user(db, email=email)
+        except Exception as exc:
+            await db.rollback()
+            audit_event(request=request, event="auth.google.callback", outcome="fail", detail=f"user_persist_failed: {exc}")
+            fail_url = append_error_to_redirect_url(redirect_uri=app_redirect_uri, error="google_user_persist_failed")
+            return RedirectResponse(url=fail_url, status_code=302)
 
         token = create_access_token(user_id=str(user.id))
         audit_event(request=request, event="auth.google.callback", outcome="success", user_id=str(user.id), email=email)
         success_url = append_token_to_redirect_url(redirect_uri=app_redirect_uri, access_token=token)
         return RedirectResponse(url=success_url, status_code=302)
     except Exception as exc:
+        await db.rollback()
         audit_event(request=request, event="auth.google.callback", outcome="fail", detail=str(exc))
         fail_url = append_error_to_redirect_url(redirect_uri=app_redirect_uri, error="google_auth_failed")
         return RedirectResponse(url=fail_url, status_code=302)
@@ -195,11 +227,7 @@ async def google_code_login(
         raise HTTPException(status_code=401, detail="Invalid Google code")
 
     email = claims["email"]
-    user = await db.scalar(select(User).where(User.email == email))
-    if not user:
-        user = User(id=uuid.uuid4(), email=email, password_hash=hash_password(str(uuid.uuid4())))
-        db.add(user)
-        await db.commit()
+    user = await _get_or_create_google_user(db, email=email)
 
     token = create_access_token(user_id=str(user.id))
     audit_event(request=request, event="auth.google.code", outcome="success", user_id=str(user.id), email=email)
