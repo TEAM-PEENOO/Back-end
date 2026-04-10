@@ -15,10 +15,13 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    google_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    profile_image: Mapped[str | None] = mapped_column(String, nullable=True)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
-    persona: Mapped["Persona"] = relationship(back_populates="user", uselist=False)
+    personas: Mapped[list["Persona"]] = relationship(back_populates="user")
 
 
 class Subject(Base):
@@ -90,13 +93,9 @@ class Persona(Base):
         Enum("curious", "careful", "clumsy", "perfectionist", name="personality_type"),
         nullable=False,
     )
-    # Compatibility fields kept while API layer is being migrated fully to v2.
-    subject: Mapped[str] = mapped_column(String, default="custom", nullable=False)
-    current_level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    placement_done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
-    user: Mapped[User] = relationship(back_populates="persona")
+    user: Mapped[User] = relationship(back_populates="personas")
 
 
 class TeachingSession(Base):
@@ -129,7 +128,7 @@ class WeakPointTag(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 
-class PersonaConcept(Base):
+class PersonaMemory(Base):
     __tablename__ = "persona_memory"
     __table_args__ = (UniqueConstraint("persona_id", "concept", name="uq_persona_memory_persona_concept"),)
 
@@ -162,4 +161,3 @@ class Exam(Base):
     combined_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-

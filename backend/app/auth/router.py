@@ -40,11 +40,38 @@ from app.deps import get_current_user_id
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
-async def _get_or_create_google_user(db: AsyncSession, *, email: str) -> User:
+async def _get_or_create_google_user(
+    db: AsyncSession,
+    *,
+    email: str,
+    google_id: str,
+    name: str | None = None,
+    profile_image: str | None = None,
+) -> User:
     user = await db.scalar(select(User).where(User.email == email))
     if user:
+        # 최초 OAuth 로그인 시 google_id / 프로필 정보가 없으면 채움
+        changed = False
+        if user.google_id is None:
+            user.google_id = google_id
+            changed = True
+        if name and user.name is None:
+            user.name = name
+            changed = True
+        if profile_image and user.profile_image is None:
+            user.profile_image = profile_image
+            changed = True
+        if changed:
+            await db.commit()
         return user
-    user = User(id=uuid.uuid4(), email=email, password_hash=build_unusable_password_hash())
+    user = User(
+        id=uuid.uuid4(),
+        email=email,
+        google_id=google_id,
+        name=name,
+        profile_image=profile_image,
+        password_hash=build_unusable_password_hash(),
+    )
     db.add(user)
     try:
         await db.commit()
@@ -113,6 +140,8 @@ async def me(
     return MeResponse(
         id=str(user.id),
         email=user.email,
+        name=user.name,
+        profile_image=user.profile_image,
         created_at=user.created_at.isoformat(),
     )
 
@@ -143,7 +172,13 @@ async def google_login(
         raise HTTPException(status_code=401, detail="Invalid Google token")
 
     email = claims["email"]
-    user = await _get_or_create_google_user(db, email=email)
+    user = await _get_or_create_google_user(
+        db,
+        email=email,
+        google_id=claims["sub"],
+        name=claims.get("name"),
+        profile_image=claims.get("picture"),
+    )
 
     token = create_access_token(user_id=str(user.id))
     audit_event(request=request, event="auth.google", outcome="success", user_id=str(user.id), email=email)
@@ -193,7 +228,13 @@ async def google_oauth_callback(
 
         email = claims["email"]
         try:
-            user = await _get_or_create_google_user(db, email=email)
+            user = await _get_or_create_google_user(
+                db,
+                email=email,
+                google_id=claims["sub"],
+                name=claims.get("name"),
+                profile_image=claims.get("picture"),
+            )
         except Exception as exc:
             await db.rollback()
             audit_event(request=request, event="auth.google.callback", outcome="fail", detail=f"user_persist_failed: {exc}")
@@ -239,7 +280,13 @@ async def google_code_login(
         raise HTTPException(status_code=401, detail="Invalid Google code")
 
     email = claims["email"]
-    user = await _get_or_create_google_user(db, email=email)
+    user = await _get_or_create_google_user(
+        db,
+        email=email,
+        google_id=claims["sub"],
+        name=claims.get("name"),
+        profile_image=claims.get("picture"),
+    )
 
     token = create_access_token(user_id=str(user.id))
     audit_event(request=request, event="auth.google.code", outcome="success", user_id=str(user.id), email=email)

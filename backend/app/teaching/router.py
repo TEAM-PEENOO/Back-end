@@ -12,7 +12,7 @@ from app.ai.prompts import build_socratic_system_prompt
 from app.common.audit import audit_event
 from app.common.rate_limit import rate_limit
 from app.common.weak_points import upsert_weak_point_tag
-from app.db.models import Persona, PersonaConcept, TeachingSession
+from app.db.models import Persona, PersonaMemory, TeachingSession
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.personality.profiles import profile_for
@@ -225,7 +225,7 @@ async def finish_session(
     # Update persona concept memory
     profile = profile_for(persona.personality)
     mem = await db.scalar(
-        select(PersonaConcept).where(PersonaConcept.persona_id == persona.id, PersonaConcept.concept == session.concept)
+        select(PersonaMemory).where(PersonaMemory.persona_id == persona.id, PersonaMemory.concept == session.concept)
     )
     if mem:
         mem.taught_count += 1
@@ -234,7 +234,7 @@ async def finish_session(
         mem.last_taught_at = datetime.now(timezone.utc)
     else:
         db.add(
-            PersonaConcept(
+            PersonaMemory(
                 persona_id=persona.id,
                 concept=session.concept,
                 taught_count=1,

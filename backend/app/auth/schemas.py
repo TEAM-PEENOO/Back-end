@@ -33,5 +33,7 @@ class AuthResponse(BaseModel):
 class MeResponse(BaseModel):
     id: str
     email: EmailStr
+    name: str | None
+    profile_image: str | None
     created_at: str
 
