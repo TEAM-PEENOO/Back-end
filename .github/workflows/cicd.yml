@@ -122,6 +122,7 @@ jobs:
             --from-literal=GOOGLE_CLIENT_ID="${{ secrets.GOOGLE_CLIENT_ID }}" \
             --from-literal=GOOGLE_CLIENT_SECRET="${{ secrets.GOOGLE_CLIENT_SECRET }}" \
             --from-literal=GOOGLE_OAUTH_REDIRECT_URI="${{ secrets.GOOGLE_OAUTH_REDIRECT_URI }}" \
+            --from-literal=GOOGLE_APP_REDIRECT_DEFAULT="${{ secrets.GOOGLE_APP_REDIRECT_DEFAULT }}" \
             --from-literal=CORS_ALLOW_ORIGINS="${{ secrets.CORS_ALLOW_ORIGINS }}" \
             --from-literal=ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}" \
             --from-literal=ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
