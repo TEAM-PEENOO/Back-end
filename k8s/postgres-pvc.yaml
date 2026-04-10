@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: prove
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path   # k3s 기본 스토리지 클래스
+  resources:
+    requests:
+      storage: 5Gi
