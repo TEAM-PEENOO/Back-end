@@ -175,7 +175,7 @@ async def google_oauth_callback(
     app_redirect_uri = decode_oauth_state(state) or settings.google_app_redirect_default
     if not app_redirect_uri:
         # Last-resort guard to avoid empty redirect targets.
-        app_redirect_uri = "https://peenoo.netlify.app/auth/callback"
+        app_redirect_uri = "https://teachu.n-e.kr/auth/callback"
     try:
         try:
             id_token = await exchange_google_code_for_id_token(code=code, redirect_uri=settings.google_oauth_redirect_uri)
