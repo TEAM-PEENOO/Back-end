@@ -72,7 +72,12 @@ async def verify_google_id_token(id_token: str) -> dict[str, str]:
     sub = payload.get("sub")
     if not email or not sub:
         raise ValueError("Google token missing required claims")
-    return {"email": email, "sub": sub}
+    return {
+        "email": email,
+        "sub": sub,
+        "name": payload.get("name"),
+        "picture": payload.get("picture"),
+    }
 
 
 def build_google_oauth_url(*, state: str, redirect_uri: str) -> str:

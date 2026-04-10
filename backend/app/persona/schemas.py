@@ -18,6 +18,3 @@ class PersonaResponse(BaseModel):
     personality: str
     subject_id: str | None = None
     current_stage_id: str | None = None
-    current_level: int
-    placement_done: bool
-

@@ -11,7 +11,7 @@ from app.db.models import (
     CurriculumItem,
     Exam,
     Persona,
-    PersonaConcept,
+    PersonaMemory,
     Stage,
     StageCurriculumItem,
     Subject,
@@ -373,12 +373,12 @@ async def subject_session_end(
     session.weak_points = raw_weak
     session.summary_generated = True
 
-    # Upsert PersonaConcept memory for this session's concept
+    # Upsert PersonaMemory memory for this session's concept
     concept_key = session.concept
     existing_concept = await db.scalar(
-        select(PersonaConcept).where(
-            PersonaConcept.persona_id == persona.id,
-            PersonaConcept.concept == concept_key,
+        select(PersonaMemory).where(
+            PersonaMemory.persona_id == persona.id,
+            PersonaMemory.concept == concept_key,
         )
     )
     if existing_concept:
@@ -387,7 +387,7 @@ async def subject_session_end(
         existing_concept.last_taught_at = datetime.now(timezone.utc)
         memory_row = existing_concept
     else:
-        memory_row = PersonaConcept(
+        memory_row = PersonaMemory(
             persona_id=persona.id,
             curriculum_item_id=session.curriculum_item_id,
             concept=concept_key,
@@ -698,9 +698,9 @@ async def list_subject_persona_memory(
     persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
     rows = (
         await db.scalars(
-            select(PersonaConcept)
-            .where(PersonaConcept.persona_id == persona.id)
-            .order_by(desc(PersonaConcept.last_taught_at))
+            select(PersonaMemory)
+            .where(PersonaMemory.persona_id == persona.id)
+            .order_by(desc(PersonaMemory.last_taught_at))
         )
     ).all()
     result = []
@@ -730,7 +730,7 @@ async def get_subject_persona_memory(
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
     persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
     row = await db.scalar(
-        select(PersonaConcept).where(PersonaConcept.id == memory_id, PersonaConcept.persona_id == persona.id)
+        select(PersonaMemory).where(PersonaMemory.id == memory_id, PersonaMemory.persona_id == persona.id)
     )
     if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
@@ -758,7 +758,7 @@ async def delete_subject_persona_memory(
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
     persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
     row = await db.scalar(
-        select(PersonaConcept).where(PersonaConcept.id == memory_id, PersonaConcept.persona_id == persona.id)
+        select(PersonaMemory).where(PersonaMemory.id == memory_id, PersonaMemory.persona_id == persona.id)
     )
     if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
@@ -1259,7 +1259,7 @@ async def create_stage_exam(
     stage_items = (
         await db.scalars(select(CurriculumItem.title).where(CurriculumItem.id.in_(stage_item_ids)))
     ).all() if stage_item_ids else []
-    level_hint = max(1, min(9, len(stage_items) or persona.current_level))
+    level_hint = max(1, min(9, len(stage_items) or 1))
 
     class _Req:
         state = type("obj", (), {"request_id": None})()
@@ -1352,7 +1352,7 @@ async def subject_progress(
 
     # overall_retention: average stability across all persona memory concepts
     memory_rows = (
-        await db.scalars(select(PersonaConcept).where(PersonaConcept.persona_id == persona.id))
+        await db.scalars(select(PersonaMemory).where(PersonaMemory.persona_id == persona.id))
     ).all()
     if memory_rows:
         overall_retention = round(sum(r.stability for r in memory_rows) / len(memory_rows) * 100, 1)

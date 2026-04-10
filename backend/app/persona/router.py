@@ -38,9 +38,6 @@ async def create_persona(
         subject_id=subject_id,
         name=payload.name,
         personality=payload.personality,
-        subject="math",
-        current_level=1,
-        placement_done=False,
     )
     db.add(persona)
     await db.commit()
@@ -52,8 +49,6 @@ async def create_persona(
         personality=persona.personality,
         subject_id=str(persona.subject_id) if persona.subject_id else None,
         current_stage_id=str(persona.current_stage_id) if persona.current_stage_id else None,
-        current_level=persona.current_level,
-        placement_done=persona.placement_done,
     )
 
 
@@ -71,8 +66,6 @@ async def get_me(
         personality=persona.personality,
         subject_id=str(persona.subject_id) if persona.subject_id else None,
         current_stage_id=str(persona.current_stage_id) if persona.current_stage_id else None,
-        current_level=persona.current_level,
-        placement_done=persona.placement_done,
     )
 
 
@@ -99,7 +92,4 @@ async def patch_me(
         personality=persona.personality,
         subject_id=str(persona.subject_id) if persona.subject_id else None,
         current_stage_id=str(persona.current_stage_id) if persona.current_stage_id else None,
-        current_level=persona.current_level,
-        placement_done=persona.placement_done,
     )
-
