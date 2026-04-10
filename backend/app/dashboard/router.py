@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Exam, Persona, PersonaConcept, TeachingSession, WeakPointTag
+from app.db.models import Exam, Persona, PersonaMemory, TeachingSession, WeakPointTag
 from app.engines.forgetting_curve import retention_probability
 from app.dashboard.schemas import ExamHistoryItem, HomeResponse, TeachingHistoryItem, WeakPointItem
 from app.db.session import get_db
@@ -27,7 +27,7 @@ async def home(
 ) -> HomeResponse:
     persona = await _get_persona(db, user_id)
     recent_cnt = len((await db.scalars(select(TeachingSession).where(TeachingSession.persona_id == persona.id))).all())
-    mem_rows = (await db.scalars(select(PersonaConcept).where(PersonaConcept.persona_id == persona.id))).all()
+    mem_rows = (await db.scalars(select(PersonaMemory).where(PersonaMemory.persona_id == persona.id))).all()
     if mem_rows:
         vals = [retention_probability(last_taught_at=m.last_taught_at, stability=m.stability) for m in mem_rows]
         retention_summary = round(sum(vals) / len(vals), 3)
