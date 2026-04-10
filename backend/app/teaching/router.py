@@ -138,7 +138,7 @@ async def add_message(
     messages.append(
         {
             "role": "user",
-            "content": payload.content,
+            "content": payload.message,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     )

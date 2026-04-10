@@ -210,9 +210,6 @@ async def create_subject_persona(
         subject_id=subject.id,
         name=payload.name,
         personality=payload.personality,
-        subject="math",
-        current_level=1,
-        placement_done=False,
     )
     db.add(persona)
     await db.commit()
