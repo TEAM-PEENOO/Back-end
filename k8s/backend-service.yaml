@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: prove-backend-svc
+  namespace: prove
+spec:
+  selector:
+    app: prove-backend
+  ports:
+    - name: http
+      port: 12569       # 호스트에서 klipper-lb가 바인딩하는 포트 (NGINX Proxy Manager가 바라보는 포트)
+      targetPort: 8000  # 컨테이너 내부 uvicorn 포트
+  type: LoadBalancer
