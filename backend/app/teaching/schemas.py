@@ -11,11 +11,30 @@ class CreateTeachingSessionResponse(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    content: str
+    message: str
 
 
 class OkResponse(BaseModel):
     ok: bool = True
+
+
+class WeakPointOut(BaseModel):
+    concept: str
+    description: str
+
+
+class UpdatedMemory(BaseModel):
+    concept: str
+    summary: str | None
+    taught_count: int
+    retention: float
+
+
+class EndSessionResponse(BaseModel):
+    session_id: str
+    quality_score: int
+    weak_points: list[WeakPointOut]
+    updated_memories: list[UpdatedMemory]
 
 
 class TeachingResultResponse(BaseModel):
@@ -23,4 +42,3 @@ class TeachingResultResponse(BaseModel):
     grade_label: str
     weak_points: list[str]
     next_focus: str
-

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, func, select
+from sqlalchemy import asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -18,6 +18,7 @@ from app.db.models import (
     TeachingSession,
     WeakPointTag,
 )
+from app.common.weak_points import upsert_weak_point_tag
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.exam.router import (
@@ -26,7 +27,15 @@ from app.exam.router import (
     grade_exam_submission,
     save_user_answers_only,
 )
-from app.exam.schemas import CreateExamResponse, SubmitExamRequest, SubmitExamResponse
+from app.exam.schemas import (
+    CreateExamResponse,
+    ExamOut,
+    ExamQuestionFull,
+    GradeResult,
+    PersonaAnswerOut,
+    SubmitExamRequest,
+    SubmitExamResponse,
+)
 from app.persona.schemas import CreatePersonaRequest, PersonaResponse, UpdatePersonaRequest
 from app.subjects.schemas import (
     CurriculumCreateRequest,
@@ -37,9 +46,33 @@ from app.subjects.schemas import (
     SubjectUpdateRequest,
     SubjectOut,
 )
-from app.teaching.schemas import CreateTeachingSessionRequest, CreateTeachingSessionResponse, MessageRequest, TeachingResultResponse
+from app.teaching.schemas import (
+    CreateTeachingSessionRequest,
+    CreateTeachingSessionResponse,
+    EndSessionResponse,
+    MessageRequest,
+    TeachingResultResponse,
+    UpdatedMemory,
+    WeakPointOut,
+)
 
 router = APIRouter(prefix="/subjects", tags=["Subjects"])
+
+
+def _calc_retention(stability: float) -> tuple[float, str]:
+    """stability(0~1) → (retention_pct, retention_label)"""
+    pct = round(stability * 100, 1)
+    if pct >= 80:
+        label = "선명"
+    elif pct >= 60:
+        label = "흐릿해지는 중"
+    elif pct >= 40:
+        label = "많이 흐릿함"
+    elif pct >= 20:
+        label = "거의 잊어버림"
+    else:
+        label = "잊어버림"
+    return pct, label
 
 
 async def _get_subject(db: AsyncSession, *, subject_id: uuid.UUID, user_id: str) -> Subject:
@@ -286,7 +319,7 @@ async def subject_session_chat(
         raise HTTPException(status_code=404, detail="Session not found")
 
     messages = list(session.messages or [])
-    messages.append({"role": "user", "content": payload.content, "timestamp": datetime.now(timezone.utc).isoformat()})
+    messages.append({"role": "user", "content": payload.message, "timestamp": datetime.now(timezone.utc).isoformat()})
     session.messages = messages
     await db.commit()
 
@@ -313,38 +346,80 @@ async def subject_session_chat(
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
-@router.post("/{subject_id}/persona/sessions/{session_id}/end", response_model=TeachingResultResponse)
+@router.post("/{subject_id}/persona/sessions/{session_id}/end", response_model=EndSessionResponse)
 async def subject_session_end(
     subject_id: uuid.UUID,
     session_id: uuid.UUID,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-) -> TeachingResultResponse:
+) -> EndSessionResponse:
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
     persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
     session = await db.scalar(select(TeachingSession).where(TeachingSession.id == session_id, TeachingSession.persona_id == persona.id))
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
     user_msgs = [m for m in (session.messages or []) if m.get("role") == "user"]
     total_chars = sum(len(str(m.get("content", ""))) for m in user_msgs)
     score = 90 if total_chars >= 300 else (80 if total_chars >= 180 else (70 if total_chars >= 90 else 60))
-    weak_points = []
+
+    raw_weak: list[str] = []
     if len(user_msgs) < 2:
-        weak_points.append("설명 반복 부족")
+        raw_weak.append("설명 반복 부족")
     if not any("?" in str(m.get("content", "")) for m in user_msgs):
-        weak_points.append("확인 질문 부족")
+        raw_weak.append("확인 질문 부족")
     if total_chars < 120:
-        weak_points.append("예시 밀도 부족")
+        raw_weak.append("예시 밀도 부족")
+    raw_weak = raw_weak[:5]
+
     session.quality_score = score
-    session.weak_points = weak_points[:5]
+    session.weak_points = raw_weak
     session.summary_generated = True
+
+    # Upsert PersonaConcept memory for this session's concept
+    concept_key = session.concept
+    existing_concept = await db.scalar(
+        select(PersonaConcept).where(
+            PersonaConcept.persona_id == persona.id,
+            PersonaConcept.concept == concept_key,
+        )
+    )
+    if existing_concept:
+        existing_concept.taught_count += 1
+        existing_concept.stability = min(1.0, existing_concept.stability + 0.1)
+        existing_concept.last_taught_at = datetime.now(timezone.utc)
+        memory_row = existing_concept
+    else:
+        memory_row = PersonaConcept(
+            persona_id=persona.id,
+            curriculum_item_id=session.curriculum_item_id,
+            concept=concept_key,
+            summary=None,
+            taught_count=1,
+            stability=0.6,
+        )
+        db.add(memory_row)
+
     await db.commit()
-    grade = "A" if score >= 85 else ("B" if score >= 70 else "C")
-    return TeachingResultResponse(
-        score=score,
-        grade_label=grade,
-        weak_points=weak_points[:5],
-        next_focus="핵심 규칙 1개와 반례 1개를 함께 설명해보기",
+    await db.refresh(memory_row)
+
+    retention_pct, _ = _calc_retention(memory_row.stability)
+
+    weak_points_out = [WeakPointOut(concept=w, description=w) for w in raw_weak]
+    updated_memories = [
+        UpdatedMemory(
+            concept=memory_row.concept,
+            summary=memory_row.summary,
+            taught_count=memory_row.taught_count,
+            retention=retention_pct,
+        )
+    ]
+
+    return EndSessionResponse(
+        session_id=str(session.id),
+        quality_score=score,
+        weak_points=weak_points_out,
+        updated_memories=updated_memories,
     )
 
 
@@ -369,6 +444,7 @@ async def list_subject_weak_points(
             "concept": r.concept,
             "fail_count": r.fail_count,
             "last_failed_at": r.last_failed_at.isoformat(),
+            "created_at": r.created_at.isoformat(),
         }
         for r in rows
     ]
@@ -391,6 +467,7 @@ async def get_subject_weak_point(
         "concept": row.concept,
         "fail_count": row.fail_count,
         "last_failed_at": row.last_failed_at.isoformat(),
+        "created_at": row.created_at.isoformat(),
     }
 
 
@@ -429,6 +506,19 @@ async def list_subject_exams(
         {
             "id": str(r.id),
             "stage_id": str(r.stage_id) if r.stage_id else None,
+            "questions": [
+                {
+                    "id": q.get("id", ""),
+                    "type": q.get("type", ""),
+                    "content": q.get("content", ""),
+                    "options": q.get("options"),
+                    "concept_tag": q.get("concept_tag", ""),
+                    "difficulty": q.get("difficulty", 1),
+                }
+                for q in (r.questions or [])
+            ],
+            "user_answers": r.user_answers or [],
+            "persona_answers": r.persona_answers or [],
             "user_score": r.user_score,
             "persona_score": r.persona_score,
             "combined_score": r.combined_score,
@@ -497,23 +587,108 @@ async def submit_subject_exam_answers(
     return {"exam_id": str(exam_id), "user_answers_saved": True}
 
 
-@router.post("/{subject_id}/persona/exams/{exam_id}/grade", response_model=SubmitExamResponse)
+@router.post("/{subject_id}/persona/exams/{exam_id}/grade", response_model=GradeResult)
 async def grade_subject_exam(
     subject_id: uuid.UUID,
     exam_id: uuid.UUID,
-    payload: SubmitExamRequest,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-) -> SubmitExamResponse:
+) -> GradeResult:
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
-    class _Req:
-        state = type("obj", (), {"request_id": None})()
-        headers = {}
-        url = None
-        method = "POST"
-        client = None
-    return await grade_exam_submission(request=_Req(), exam_id=exam_id, payload=payload, user_id=user_id, db=db)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
+
+    exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona.id))
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    if exam.combined_score is not None:
+        raise HTTPException(status_code=409, detail="Exam already graded")
+
+    questions = list(exam.questions or [])
+    q_map = {q["id"]: q for q in questions}
+    answers_input = list(exam.user_answers or [])
+    if not answers_input:
+        raise HTTPException(status_code=400, detail="User answers not submitted yet")
+    if len(answers_input) != len(questions):
+        raise HTTPException(status_code=400, detail="All questions must be answered before grading")
+
+    user_correct = 0
+    wrong_concepts: list[str] = []
+    user_answers_out: list[dict] = []
+    persona_answers_out: list[dict] = []
+
+    for idx, ans in enumerate(answers_input, start=1):
+        question_id = ans["question_id"] if isinstance(ans, dict) else ans.question_id
+        answer = ans["answer"] if isinstance(ans, dict) else ans.answer
+        q = q_map.get(question_id)
+        if not q:
+            raise HTTPException(status_code=400, detail=f"Question not in exam: {question_id}")
+        ok = answer.strip() == str(q.get("answer", "")).strip()
+        if ok:
+            user_correct += 1
+        else:
+            concept = str(q.get("concept_tag", "unknown"))
+            wrong_concepts.append(concept)
+            await upsert_weak_point_tag(db, persona_id=persona.id, concept=concept)
+        user_answers_out.append({"question_id": question_id, "answer": answer, "is_correct": ok})
+        persona_ok = (idx % 2 == 1)
+        persona_answers_out.append({
+            "question_id": question_id,
+            "thought": "이건 배운 기억이 있어요." if persona_ok else "기억이 좀 흐릿하지만 풀어볼게요.",
+            "answer": q.get("answer") if persona_ok else ("1" if str(q.get("answer")) != "1" else "2"),
+            "is_correct": persona_ok,
+        })
+
+    user_score = int((user_correct / max(len(questions), 1)) * 100)
+    persona_score = int((sum(1 for p in persona_answers_out if p["is_correct"]) / max(len(questions), 1)) * 100)
+    combined = int((user_score * 0.6) + (persona_score * 0.4))
+    pass_threshold = 75
+    passed = combined >= pass_threshold and user_score >= 50 and persona_score >= 30
+
+    exam.user_answers = user_answers_out
+    exam.persona_answers = persona_answers_out
+    exam.user_score = user_score
+    exam.persona_score = persona_score
+    exam.combined_score = combined
+    exam.passed = passed
+
+    # Hide answer keys after grading
+    for q in questions:
+        q["answer"] = None
+    exam.questions = questions
+
+    # Update next_stage_id if passed
+    next_stage_id: str | None = None
+    if passed:
+        stage = await db.scalar(select(Stage).where(Stage.id == exam.stage_id))
+        if stage:
+            persona.current_stage_id = stage.id
+            next_stage = await db.scalar(
+                select(Stage)
+                .where(Stage.subject_id == stage.subject_id, Stage.order_index > stage.order_index)
+                .order_by(asc(Stage.order_index))
+            )
+            next_stage_id = str(next_stage.id) if next_stage else None
+
+    await db.commit()
+
+    return GradeResult(
+        exam_id=str(exam.id),
+        user_score=user_score,
+        persona_score=persona_score,
+        combined_score=combined,
+        passed=passed,
+        pass_threshold=pass_threshold,
+        persona_answers=[
+            PersonaAnswerOut(
+                question_id=p["question_id"],
+                thought=p["thought"],
+                answer=str(p["answer"] or ""),
+            )
+            for p in persona_answers_out
+        ],
+        wrong_concepts=wrong_concepts,
+        next_stage_id=next_stage_id,
+    )
 
 
 @router.get("/{subject_id}/persona/memory")
@@ -531,18 +706,21 @@ async def list_subject_persona_memory(
             .order_by(desc(PersonaConcept.last_taught_at))
         )
     ).all()
-    return [
-        {
+    result = []
+    for r in rows:
+        retention_pct, retention_label = _calc_retention(r.stability)
+        result.append({
             "id": str(r.id),
             "concept": r.concept,
             "summary": r.summary,
             "taught_count": r.taught_count,
             "stability": r.stability,
             "last_taught_at": r.last_taught_at.isoformat(),
+            "retention": retention_pct,
+            "retention_label": retention_label,
             "curriculum_item_id": str(r.curriculum_item_id) if r.curriculum_item_id else None,
-        }
-        for r in rows
-    ]
+        })
+    return result
 
 
 @router.get("/{subject_id}/persona/memory/{memory_id}")
@@ -559,6 +737,7 @@ async def get_subject_persona_memory(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
+    retention_pct, retention_label = _calc_retention(row.stability)
     return {
         "id": str(row.id),
         "concept": row.concept,
@@ -566,6 +745,8 @@ async def get_subject_persona_memory(
         "taught_count": row.taught_count,
         "stability": row.stability,
         "last_taught_at": row.last_taught_at.isoformat(),
+        "retention": retention_pct,
+        "retention_label": retention_label,
         "curriculum_item_id": str(row.curriculum_item_id) if row.curriculum_item_id else None,
     }
 
@@ -611,6 +792,7 @@ async def list_subject_sessions(
             "concept": r.concept,
             "quality_score": r.quality_score,
             "weak_points": r.weak_points or [],
+            "messages": r.messages or [],
             "summary_generated": r.summary_generated,
             "created_at": r.created_at.isoformat(),
         }
@@ -1057,13 +1239,13 @@ async def reorder_stages(
     return out
 
 
-@router.post("/{subject_id}/stages/{stage_id}/exams", response_model=CreateExamResponse)
+@router.post("/{subject_id}/stages/{stage_id}/exams", response_model=ExamOut)
 async def create_stage_exam(
     subject_id: uuid.UUID,
     stage_id: uuid.UUID,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
-) -> CreateExamResponse:
+) -> ExamOut:
     subject = await _get_subject(db, subject_id=subject_id, user_id=user_id)
     stage = await db.scalar(select(Stage).where(Stage.id == stage_id, Stage.subject_id == subject.id))
     if not stage:
@@ -1089,13 +1271,41 @@ async def create_stage_exam(
         method = "POST"
         client = None
 
-    return await _create_regular_exam(
+    create_resp = await _create_regular_exam(
         request=_Req(),
         db=db,
         persona=persona,
         user_id=user_id,
         level=level_hint,
         stage_id=stage.id,
+    )
+
+    # Fetch the created exam to return full Exam shape
+    exam = await db.scalar(select(Exam).where(Exam.id == uuid.UUID(create_resp.exam_id)))
+    if not exam:
+        raise HTTPException(status_code=500, detail="Exam creation failed")
+
+    return ExamOut(
+        id=str(exam.id),
+        stage_id=str(exam.stage_id),
+        questions=[
+            ExamQuestionFull(
+                id=q.get("id", ""),
+                type=q.get("type", ""),
+                content=q.get("content", ""),
+                options=q.get("options"),
+                concept_tag=q.get("concept_tag", ""),
+                difficulty=q.get("difficulty", 1),
+            )
+            for q in (exam.questions or [])
+        ],
+        user_answers=exam.user_answers or [],
+        persona_answers=exam.persona_answers or [],
+        user_score=exam.user_score,
+        persona_score=exam.persona_score,
+        combined_score=exam.combined_score,
+        passed=exam.passed,
+        created_at=exam.created_at.isoformat(),
     )
 
 
@@ -1142,14 +1352,66 @@ async def subject_progress(
     weak_rows = (
         await db.scalars(select(WeakPointTag).where(WeakPointTag.persona_id == persona.id).order_by(desc(WeakPointTag.fail_count)))
     ).all()
+
+    # overall_retention: average stability across all persona memory concepts
+    memory_rows = (
+        await db.scalars(select(PersonaConcept).where(PersonaConcept.persona_id == persona.id))
+    ).all()
+    if memory_rows:
+        overall_retention = round(sum(r.stability for r in memory_rows) / len(memory_rows) * 100, 1)
+    else:
+        overall_retention = 0.0
+
+    # current_stage items with retention
+    current_stage_out = None
+    if current:
+        cur_links = (await db.scalars(select(StageCurriculumItem).where(StageCurriculumItem.stage_id == current.id))).all()
+        cur_item_ids = [link.curriculum_item_id for link in cur_links]
+        cur_items = (
+            await db.scalars(select(CurriculumItem).where(CurriculumItem.id.in_(cur_item_ids)).order_by(CurriculumItem.order_index.asc()))
+        ).all() if cur_item_ids else []
+        taught_set = set(
+            (
+                await db.scalars(
+                    select(func.distinct(TeachingSession.curriculum_item_id)).where(
+                        TeachingSession.persona_id == persona.id,
+                        TeachingSession.curriculum_item_id.isnot(None),
+                    )
+                )
+            ).all()
+        )
+        concept_map = {r.curriculum_item_id: r for r in memory_rows if r.curriculum_item_id}
+        total_count = len(cur_items)
+        taught_count = sum(1 for ci in cur_items if ci.id in taught_set)
+        untaught_count = max(0, total_count - taught_count)
+        items_out = []
+        for ci in cur_items:
+            mem = concept_map.get(ci.id)
+            if mem:
+                ret_pct, ret_label = _calc_retention(mem.stability)
+            else:
+                ret_pct, ret_label = (0.0, "잊어버림")
+            items_out.append({
+                "id": str(ci.id),
+                "title": ci.title,
+                "taught": ci.id in taught_set,
+                "retention": ret_pct,
+                "retention_label": ret_label,
+            })
+        current_stage_out = {
+            "id": str(current.id),
+            "name": current.name,
+            "order_index": current.order_index,
+            "exam_unlocked": (untaught_count == 0 and total_count > 0),
+            "untaught_count": untaught_count,
+            "items": items_out,
+        }
+
     return {
         "subject": {"id": str(subject.id), "name": subject.name},
         "persona": {"id": str(persona.id), "name": persona.name, "personality": persona.personality},
-        "current_stage": {
-            "id": str(current.id) if current else None,
-            "name": current.name if current else None,
-            "order_index": current.order_index if current else None,
-        },
+        "current_stage": current_stage_out,
+        "overall_retention": overall_retention,
         "stage_history": stage_history,
         "weak_points": [{"concept": w.concept, "fail_count": w.fail_count} for w in weak_rows],
     }
