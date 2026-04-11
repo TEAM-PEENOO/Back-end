@@ -324,35 +324,48 @@ async def subject_session_chat(
     session.messages = messages
     await db.commit()
 
-    # 대화 히스토리를 컨텍스트로 구성 (최근 10턴)
-    recent = messages[-20:]
+    # 스트리밍 중 DB 세션 만료를 피하기 위해 필요한 값을 미리 캡처
+    session_id_val = session.id
+    persona_name = persona.name
+    persona_personality = persona.personality
+    session_concept = session.concept
+    messages_snapshot = list(messages)  # commit 후 만료된 session 대신 로컬 복사본 사용
+
+    # 대화 히스토리를 컨텍스트로 구성 (최근 20턴)
+    recent = messages_snapshot[-20:]
     history_text = "\n".join(
-        f"{'선생님' if m['role'] == 'user' else persona.name}: {m['content']}"
+        f"{'선생님' if m['role'] == 'user' else persona_name}: {m['content']}"
         for m in recent
     )
     user_content = f"대화 기록:\n{history_text}\n\n선생님의 마지막 설명: {payload.message}"
 
     system_prompt = build_socratic_system_prompt(
-        persona_name=persona.name,
-        personality=persona.personality,
-        concept=session.concept,
+        persona_name=persona_name,
+        personality=persona_personality,
+        concept=session_concept,
     )
 
     async def event_gen():
         full_reply = []
-        async for token in _claude.stream_text(
-            system_prompt=system_prompt,
-            user_content=user_content,
-        ):
-            full_reply.append(token)
-            yield f"data: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
+        try:
+            async for token in _claude.stream_text(
+                system_prompt=system_prompt,
+                user_content=user_content,
+            ):
+                full_reply.append(token)
+                yield f"data: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
+        except Exception:
+            pass  # 스트리밍 중 오류 발생 시 지금까지 수집된 내용 저장
 
-        # 완성된 응답 저장
+        # 완성된 응답을 DB에 저장 (session 재조회로 만료 문제 방지)
         reply = "".join(full_reply)
-        msgs = list(session.messages or [])
-        msgs.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
-        session.messages = msgs
-        await db.commit()
+        if reply:
+            fresh = await db.scalar(select(TeachingSession).where(TeachingSession.id == session_id_val))
+            if fresh:
+                msgs = list(fresh.messages or [])
+                msgs.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
+                fresh.messages = msgs
+                await db.commit()
 
         yield "data: {}\n\n"
 
