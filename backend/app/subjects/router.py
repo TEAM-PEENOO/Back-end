@@ -18,9 +18,13 @@ from app.db.models import (
     TeachingSession,
     WeakPointTag,
 )
+from app.ai.client import ClaudeClient
+from app.ai.prompts import build_socratic_system_prompt
 from app.common.weak_points import upsert_weak_point_tag
 from app.db.session import get_db
 from app.deps import get_current_user_id
+
+_claude = ClaudeClient()
 from app.exam.router import (
     _assert_exam_unlocked_by_stage,
     _create_regular_exam,
@@ -320,24 +324,36 @@ async def subject_session_chat(
     session.messages = messages
     await db.commit()
 
-    reply = "좋아, 방금 설명한 내용을 예시 하나로 다시 말해줄래?"
-    if persona.personality == "curious":
-        reply = "좋아! 왜 그렇게 되는지 한 번 더 설명해줄래?"
-    elif persona.personality == "careful":
-        reply = "내가 이해한 게 맞는지 핵심만 천천히 다시 정리해줄래?"
-    elif persona.personality == "clumsy":
-        reply = "헷갈렸어. 틀리기 쉬운 포인트를 같이 설명해줄래?"
-    elif persona.personality == "perfectionist":
-        reply = "좋아. 예외 케이스 하나도 같이 설명해줄래?"
+    # 대화 히스토리를 컨텍스트로 구성 (최근 10턴)
+    recent = messages[-20:]
+    history_text = "\n".join(
+        f"{'선생님' if m['role'] == 'user' else persona.name}: {m['content']}"
+        for m in recent
+    )
+    user_content = f"대화 기록:\n{history_text}\n\n선생님의 마지막 설명: {payload.message}"
+
+    system_prompt = build_socratic_system_prompt(
+        persona_name=persona.name,
+        personality=persona.personality,
+        concept=session.concept,
+    )
 
     async def event_gen():
-        yield "event: token\n"
-        yield f"data: {json.dumps({'text': reply}, ensure_ascii=False)}\n\n"
-        messages2 = list(session.messages or [])
-        messages2.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
-        session.messages = messages2
+        full_reply = []
+        async for token in _claude.stream_text(
+            system_prompt=system_prompt,
+            user_content=user_content,
+        ):
+            full_reply.append(token)
+            yield f"data: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
+
+        # 완성된 응답 저장
+        reply = "".join(full_reply)
+        msgs = list(session.messages or [])
+        msgs.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
+        session.messages = msgs
         await db.commit()
-        yield "event: done\n"
+
         yield "data: {}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
