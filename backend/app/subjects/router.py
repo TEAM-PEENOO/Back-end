@@ -18,9 +18,13 @@ from app.db.models import (
     TeachingSession,
     WeakPointTag,
 )
+from app.ai.client import ClaudeClient
+from app.ai.prompts import build_socratic_system_prompt
 from app.common.weak_points import upsert_weak_point_tag
 from app.db.session import get_db
 from app.deps import get_current_user_id
+
+_claude = ClaudeClient()
 from app.exam.router import (
     _assert_exam_unlocked_by_stage,
     _create_regular_exam,
@@ -320,24 +324,49 @@ async def subject_session_chat(
     session.messages = messages
     await db.commit()
 
-    reply = "좋아, 방금 설명한 내용을 예시 하나로 다시 말해줄래?"
-    if persona.personality == "curious":
-        reply = "좋아! 왜 그렇게 되는지 한 번 더 설명해줄래?"
-    elif persona.personality == "careful":
-        reply = "내가 이해한 게 맞는지 핵심만 천천히 다시 정리해줄래?"
-    elif persona.personality == "clumsy":
-        reply = "헷갈렸어. 틀리기 쉬운 포인트를 같이 설명해줄래?"
-    elif persona.personality == "perfectionist":
-        reply = "좋아. 예외 케이스 하나도 같이 설명해줄래?"
+    # 스트리밍 중 DB 세션 만료를 피하기 위해 필요한 값을 미리 캡처
+    session_id_val = session.id
+    persona_name = persona.name
+    persona_personality = persona.personality
+    session_concept = session.concept
+    messages_snapshot = list(messages)  # commit 후 만료된 session 대신 로컬 복사본 사용
+
+    # 대화 히스토리를 컨텍스트로 구성 (최근 20턴)
+    recent = messages_snapshot[-20:]
+    history_text = "\n".join(
+        f"{'선생님' if m['role'] == 'user' else persona_name}: {m['content']}"
+        for m in recent
+    )
+    user_content = f"대화 기록:\n{history_text}\n\n선생님의 마지막 설명: {payload.message}"
+
+    system_prompt = build_socratic_system_prompt(
+        persona_name=persona_name,
+        personality=persona_personality,
+        concept=session_concept,
+    )
 
     async def event_gen():
-        yield "event: token\n"
-        yield f"data: {json.dumps({'text': reply}, ensure_ascii=False)}\n\n"
-        messages2 = list(session.messages or [])
-        messages2.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
-        session.messages = messages2
-        await db.commit()
-        yield "event: done\n"
+        full_reply = []
+        try:
+            async for token in _claude.stream_text(
+                system_prompt=system_prompt,
+                user_content=user_content,
+            ):
+                full_reply.append(token)
+                yield f"data: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
+        except Exception:
+            pass  # 스트리밍 중 오류 발생 시 지금까지 수집된 내용 저장
+
+        # 완성된 응답을 DB에 저장 (session 재조회로 만료 문제 방지)
+        reply = "".join(full_reply)
+        if reply:
+            fresh = await db.scalar(select(TeachingSession).where(TeachingSession.id == session_id_val))
+            if fresh:
+                msgs = list(fresh.messages or [])
+                msgs.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
+                fresh.messages = msgs
+                await db.commit()
+
         yield "data: {}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
@@ -370,7 +399,7 @@ async def subject_session_end(
     raw_weak = raw_weak[:5]
 
     session.quality_score = score
-    session.weak_points = raw_weak
+    session.weak_points = [{"concept": w, "description": w} for w in raw_weak]
     session.summary_generated = True
 
     # Upsert PersonaMemory memory for this session's concept
@@ -658,13 +687,16 @@ async def grade_subject_exam(
     if passed:
         stage = await db.scalar(select(Stage).where(Stage.id == exam.stage_id))
         if stage:
-            persona.current_stage_id = stage.id
+            stage.passed = True
+            stage.passed_at = datetime.now(timezone.utc)
             next_stage = await db.scalar(
                 select(Stage)
                 .where(Stage.subject_id == stage.subject_id, Stage.order_index > stage.order_index)
                 .order_by(asc(Stage.order_index))
             )
             next_stage_id = str(next_stage.id) if next_stage else None
+            if next_stage:
+                persona.current_stage_id = next_stage.id
 
     await db.commit()
 
