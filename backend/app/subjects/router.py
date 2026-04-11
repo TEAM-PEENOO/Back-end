@@ -370,7 +370,7 @@ async def subject_session_end(
     raw_weak = raw_weak[:5]
 
     session.quality_score = score
-    session.weak_points = raw_weak
+    session.weak_points = [{"concept": w, "description": w} for w in raw_weak]
     session.summary_generated = True
 
     # Upsert PersonaMemory memory for this session's concept
@@ -658,13 +658,16 @@ async def grade_subject_exam(
     if passed:
         stage = await db.scalar(select(Stage).where(Stage.id == exam.stage_id))
         if stage:
-            persona.current_stage_id = stage.id
+            stage.passed = True
+            stage.passed_at = datetime.now(timezone.utc)
             next_stage = await db.scalar(
                 select(Stage)
                 .where(Stage.subject_id == stage.subject_id, Stage.order_index > stage.order_index)
                 .order_by(asc(Stage.order_index))
             )
             next_stage_id = str(next_stage.id) if next_stage else None
+            if next_stage:
+                persona.current_stage_id = next_stage.id
 
     await db.commit()
 
