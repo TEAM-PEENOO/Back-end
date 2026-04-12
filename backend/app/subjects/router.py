@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import asc, desc, func, select
+from sqlalchemy import asc, desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -1219,6 +1219,9 @@ async def delete_curriculum_item(
     row = await db.scalar(select(CurriculumItem).where(CurriculumItem.id == item_id, CurriculumItem.subject_id == subject_id))
     if not row:
         raise HTTPException(status_code=404, detail="Curriculum item not found")
+    # FK 제약 해소: curriculum_item_id 참조 레코드를 먼저 NULL 처리 후 삭제
+    await db.execute(update(TeachingSession).where(TeachingSession.curriculum_item_id == item_id).values(curriculum_item_id=None))
+    await db.execute(update(PersonaMemory).where(PersonaMemory.curriculum_item_id == item_id).values(curriculum_item_id=None))
     await db.delete(row)
     await db.commit()
 
