@@ -53,6 +53,25 @@ def build_practice_prompt(*, concept: str, subject_name: str) -> str:
     )
 
 
+def build_practice_answer_eval_prompt(
+    *, concept: str, subject_name: str, problem: str, user_answer: str
+) -> str:
+    return (
+        "학생의 복습 답변이 개념을 올바르게 이해하고 있는지 평가해라.\n"
+        "완벽한 표현이 아니어도 핵심 내용을 담고 있으면 정답으로 인정해.\n"
+        f"과목: {subject_name}\n"
+        f"개념: {concept}\n"
+        f"문제: {problem}\n"
+        f"학생 답변: {user_answer}\n"
+        "출력 JSON 스키마:\n"
+        '{"is_correct":true,"feedback":"피드백(1~2문장)"}\n'
+        "조건:\n"
+        "- is_correct: 핵심을 파악했으면 true, 완전히 무관하거나 틀리면 false\n"
+        "- feedback: 친근하고 격려하는 톤. 맞으면 칭찬+짧은 보충, 틀리면 힌트 제공\n"
+        "- JSON만 출력"
+    )
+
+
 def build_placement_question_prompt(*, level: int, concept: str) -> str:
     return (
         "한국 교육과정 수학 배치고사 문제 1개를 JSON으로만 생성해라.\n"
