@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     redis_url: str = ""
     rate_limit_fail_closed: bool = False
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-3-5-sonnet-latest"
+    anthropic_model: str = "claude-sonnet-4-6"
     sentry_dsn: str = ""
 
     @property
