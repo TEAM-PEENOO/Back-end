@@ -114,13 +114,26 @@ async def _generate_exam_questions(
     for i, q in enumerate(questions_raw[:5], start=1):
         qtype = q.get("type", "multiple_choice")
         options = q.get("options") if qtype == "multiple_choice" else None
+        answer_key = str(q.get("answer_key", "1"))
+
+        # 객관식: answer_key는 "1"~"5" 인덱스 → 실제 보기 텍스트로 변환
+        # 프론트엔드는 보기 텍스트를 그대로 제출하므로 저장값도 텍스트여야 채점이 일치함
+        if qtype == "multiple_choice" and options:
+            try:
+                idx = int(answer_key) - 1
+                answer = options[idx] if 0 <= idx < len(options) else answer_key
+            except (ValueError, IndexError):
+                answer = answer_key
+        else:
+            answer = answer_key
+
         questions.append(
             {
                 "id": str(uuid.uuid4()),
                 "type": qtype,
                 "content": q.get("content", ""),
                 "options": options,
-                "answer": str(q.get("answer_key", "1")),
+                "answer": answer,
                 "concept_tag": q.get("concept_tag", taught_titles[i - 1] if i <= len(taught_titles) else ""),
                 "difficulty": int(q.get("difficulty", 1)),
             }
