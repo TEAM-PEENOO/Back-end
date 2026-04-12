@@ -446,7 +446,7 @@ async def subject_session_end(
             role_label = "선생님" if m.get("role") == "user" else "학생"
             transcript_lines.append(f"{role_label}: {m.get('content', '')}")
         transcript = "\n".join(transcript_lines)
-        concept = session.concept or "수학 개념"
+        concept = session.concept or "개념"
         eval_prompt = build_teaching_evaluator_prompt(concept=concept, transcript=transcript)
         raw_eval = await _claude.complete_text(
             system_prompt="너는 수업 평가 전문가야. JSON만 출력해.",
@@ -1504,20 +1504,11 @@ async def create_stage_exam(
         raise HTTPException(status_code=403, detail="Persona is bound to another subject")
     await _assert_exam_unlocked_by_stage(db, persona_id=persona.id, stage_id=stage.id)
 
-    stage_item_ids = (
-        await db.scalars(select(StageCurriculumItem.curriculum_item_id).where(StageCurriculumItem.stage_id == stage.id))
-    ).all()
-    stage_items = (
-        await db.scalars(select(CurriculumItem.title).where(CurriculumItem.id.in_(stage_item_ids)))
-    ).all() if stage_item_ids else []
-    level_hint = max(1, min(9, len(stage_items) or 1))
-
     create_resp = await _create_regular_exam(
         request=request,
         db=db,
         persona=persona,
         user_id=user_id,
-        level=level_hint,
         stage_id=stage.id,
     )
 

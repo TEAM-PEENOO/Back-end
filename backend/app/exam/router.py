@@ -12,7 +12,7 @@ from app.ai.prompts import build_exam_questions_prompt
 from app.common.audit import audit_event
 from app.common.rate_limit import rate_limit
 from app.common.weak_points import upsert_weak_point_tag
-from app.db.models import CurriculumItem, Exam, Persona, PersonaMemory, StageCurriculumItem, TeachingSession, WeakPointTag
+from app.db.models import CurriculumItem, Exam, Persona, PersonaMemory, StageCurriculumItem, Subject, TeachingSession, WeakPointTag
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.exam.schemas import CreateExamResponse, ExamQuestionOut, SubmitExamRequest, SubmitExamResponse
@@ -59,7 +59,7 @@ async def _generate_exam_questions(
     *,
     persona_id: uuid.UUID,
     stage_id: uuid.UUID,
-    level: int,
+    subject_name: str,
     weak_tags: list[str],
 ) -> list[dict]:
     """Claude API로 실제 시험 문제를 생성한다."""
@@ -88,13 +88,13 @@ async def _generate_exam_questions(
 
     # Claude API 호출
     prompt = build_exam_questions_prompt(
-        level=level,
+        subject_name=subject_name,
         taught_concepts=taught_titles,
         weak_tags=weak_tags,
     )
     try:
         raw = await _claude.complete_text(
-            system_prompt="너는 한국 수학 교육과정 시험 문제를 JSON으로만 출력하는 전문가야.",
+            system_prompt=f"너는 [{subject_name}] 과목 시험 문제를 JSON으로만 출력하는 전문가야.",
             user_content=prompt,
             max_tokens=1200,
         )
@@ -144,7 +144,7 @@ async def _generate_exam_questions(
     while len(questions) < 5:
         i = len(questions) + 1
         qtype = "multiple_choice" if i <= 3 else "short_answer"
-        fallback_concept = taught_titles[(i - 1) % len(taught_titles)] if taught_titles else weak_tags[(i - 1) % len(weak_tags)] if weak_tags else "수학 개념"
+        fallback_concept = taught_titles[(i - 1) % len(taught_titles)] if taught_titles else weak_tags[(i - 1) % len(weak_tags)] if weak_tags else subject_name
         questions.append(
             {
                 "id": str(uuid.uuid4()),
@@ -166,11 +166,13 @@ async def _create_regular_exam(
     db: AsyncSession,
     persona: Persona,
     user_id: str,
-    level: int,
     stage_id: uuid.UUID | None,
 ) -> CreateExamResponse:
     if stage_id is None:
         raise HTTPException(status_code=400, detail="stage_id is required")
+
+    subject = await db.scalar(select(Subject).where(Subject.id == persona.subject_id))
+    subject_name = subject.name if subject else "알 수 없는 과목"
 
     weak_rows = (
         await db.scalars(
@@ -184,7 +186,7 @@ async def _create_regular_exam(
         db,
         persona_id=persona.id,
         stage_id=stage_id,
-        level=level,
+        subject_name=subject_name,
         weak_tags=weak_tags,
     )
 
@@ -216,7 +218,7 @@ async def _create_regular_exam(
         )
         for idx, q in enumerate(questions)
     ]
-    return CreateExamResponse(exam_id=str(exam.id), level=level, questions=out_questions)
+    return CreateExamResponse(exam_id=str(exam.id), questions=out_questions)
 
 
 @router.post("", response_model=CreateExamResponse)
@@ -235,7 +237,6 @@ async def create_exam(
         db=db,
         persona=persona,
         user_id=user_id,
-        level=1,
         stage_id=persona.current_stage_id,
     )
 
@@ -397,7 +398,5 @@ async def grade_exam_submission(
         persona_score=persona_score,
         combined_score=combined,
         passed=passed,
-        level_before=1,
-        level_after=1,
         weak_points_updated=weak_points_updated,
     )
