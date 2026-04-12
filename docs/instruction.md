@@ -3,14 +3,18 @@
 > **이 문서는 모든 공유 문서의 Single Source of Truth(SSoT)입니다.**
 > 공유 문서를 수정할 때는 반드시 **백엔드 레포에서 먼저 수정**하고, 이후 프론트엔드 레포로 동기화합니다.
 >
-> 동기화 명령 (백엔드 레포 루트에서):
+> 동기화 명령 (백엔드 레포 루트에서 실행):
 > ```sh
 > # 공유 문서 전체 동기화
-> rsync -av docs/instruction.md ../vibeContest/docs/
-> rsync -av docs/architecture/{main_logic,AI_API_Architecture,DB_Schema}.md ../vibeContest/docs/architecture/
-> rsync -av docs/api/API_spec.md ../vibeContest/docs/api/
-> rsync -av docs/planning/{prompt_history,proposal}.md ../vibeContest/docs/planning/
+> rsync -av docs/instruction.md ../../Front-end-main/docs/
+> rsync -av docs/architecture/{main_logic,AI_API_Architecture,DB_Schema}.md ../../Front-end-main/docs/architecture/
+> rsync -av docs/api/API_spec.md ../../Front-end-main/docs/api/
+> rsync -av docs/planning/{prompt_history,proposal}.md ../../Front-end-main/docs/planning/
 > ```
+> ⚠️ **상대경로 주의 (2인 협업)**: 위 경로(`../../Front-end-main/`)는 작업자마다 로컬 폴더명이 다를 수 있음.
+> 실행 전 반드시 본인의 프론트엔드 레포 경로를 확인하고 조정할 것.
+> 예) 승범: `../../Front-end-main/` / 다른 작업자: `../프론트폴더명/`
+> Windows 환경에서 rsync 미설치 시 `cp` 명령으로 대체 가능.
 
 ---
 
