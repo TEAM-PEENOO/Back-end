@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import asc, desc, func, select
+from sqlalchemy import asc, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -889,7 +889,9 @@ async def grade_subject_exam(
     passed = combined >= pass_threshold
 
     exam.user_answers = user_answers_out
+    flag_modified(exam, "user_answers")
     exam.persona_answers = persona_answers_out
+    flag_modified(exam, "persona_answers")
     exam.user_score = user_score
     exam.persona_score = persona_score
     exam.combined_score = combined
@@ -899,6 +901,7 @@ async def grade_subject_exam(
     for q in questions:
         q["answer"] = None
     exam.questions = questions
+    flag_modified(exam, "questions")
 
     # Update next_stage_id if passed
     next_stage_id: str | None = None
@@ -1441,9 +1444,9 @@ async def patch_stage(
     if "order_index" in payload and payload["order_index"] is not None:
         stage.order_index = int(payload["order_index"])
     if "curriculum_item_ids" in payload and isinstance(payload["curriculum_item_ids"], list):
-        old_links = (await db.scalars(select(StageCurriculumItem).where(StageCurriculumItem.stage_id == stage.id))).all()
-        for link in old_links:
-            await db.delete(link)
+        # DELETE 먼저 flush 후 INSERT — unique constraint 위반 방지
+        await db.execute(text("DELETE FROM stage_curriculum_items WHERE stage_id = :sid"), {"sid": str(stage.id)})
+        await db.flush()
         for raw_id in payload["curriculum_item_ids"]:
             try:
                 item_id = uuid.UUID(str(raw_id))
