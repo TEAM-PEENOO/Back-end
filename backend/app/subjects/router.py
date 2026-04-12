@@ -1222,12 +1222,19 @@ async def delete_curriculum_item(
     row = await db.scalar(select(CurriculumItem).where(CurriculumItem.id == item_id, CurriculumItem.subject_id == subject_id))
     if not row:
         raise HTTPException(status_code=404, detail="Curriculum item not found")
-    # raw SQL로 FK 참조를 순서대로 정리 후 삭제 (CASCADE 미설정 환경 포함)
-    cid = str(item_id)
-    await db.execute(text("UPDATE teaching_sessions SET curriculum_item_id = NULL WHERE curriculum_item_id = :cid"), {"cid": cid})
-    await db.execute(text("UPDATE persona_memory SET curriculum_item_id = NULL WHERE curriculum_item_id = :cid"), {"cid": cid})
-    await db.execute(text("DELETE FROM stage_curriculum_items WHERE curriculum_item_id = :cid"), {"cid": cid})
-    await db.execute(text("DELETE FROM curriculum_items WHERE id = :cid"), {"cid": cid})
+    # FK 위반 방지: ondelete 없이 선언된 FK 컬럼을 먼저 NULL로 처리
+    await db.execute(
+        TeachingSession.__table__.update()
+        .where(TeachingSession.curriculum_item_id == item_id)
+        .values(curriculum_item_id=None)
+    )
+    await db.execute(
+        PersonaMemory.__table__.update()
+        .where(PersonaMemory.curriculum_item_id == item_id)
+        .values(curriculum_item_id=None)
+    )
+    await db.flush()
+    await db.delete(row)
     await db.commit()
 
 
@@ -1466,12 +1473,15 @@ async def delete_stage(
         raise HTTPException(status_code=404, detail="Stage not found")
     if stage.passed:
         raise HTTPException(status_code=403, detail="Passed stage cannot be deleted")
-    # raw SQL로 FK 참조를 순서대로 정리 후 삭제 (CASCADE 미설정 환경 포함)
-    sid = str(stage_id)
-    await db.execute(text("UPDATE personas SET current_stage_id = NULL WHERE current_stage_id = :sid"), {"sid": sid})
-    await db.execute(text("DELETE FROM exams WHERE stage_id = :sid"), {"sid": sid})
-    await db.execute(text("DELETE FROM stage_curriculum_items WHERE stage_id = :sid"), {"sid": sid})
-    await db.execute(text("DELETE FROM stages WHERE id = :sid"), {"sid": sid})
+    # FK 위반 방지: ondelete 없이 선언된 FK 컬럼을 먼저 처리
+    await db.execute(
+        Persona.__table__.update()
+        .where(Persona.current_stage_id == stage_id)
+        .values(current_stage_id=None)
+    )
+    await db.execute(Exam.__table__.delete().where(Exam.stage_id == stage_id))
+    await db.flush()
+    await db.delete(stage)
     await db.commit()
 
 
