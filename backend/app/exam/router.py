@@ -259,8 +259,12 @@ async def save_user_answers_only(
     user_id: str,
     db: AsyncSession,
 ) -> None:
-    persona = await _get_persona(db, user_id)
-    exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona.id))
+    # user_id 소유 퍼소나면 어떤 과목 퍼소나든 허용 (과목별 퍼소나 지원)
+    exam = await db.scalar(
+        select(Exam)
+        .join(Persona, Persona.id == Exam.persona_id)
+        .where(Exam.id == exam_id, Persona.user_id == user_id)
+    )
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     questions = list(exam.questions or [])
@@ -285,10 +289,15 @@ async def grade_exam_submission(
     user_id: str,
     db: AsyncSession,
 ) -> SubmitExamResponse:
-    persona = await _get_persona(db, user_id)
-    exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona.id))
+    # user_id 소유 퍼소나면 어떤 과목 퍼소나든 허용 (과목별 퍼소나 지원)
+    exam = await db.scalar(
+        select(Exam)
+        .join(Persona, Persona.id == Exam.persona_id)
+        .where(Exam.id == exam_id, Persona.user_id == user_id)
+    )
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    persona = await db.scalar(select(Persona).where(Persona.id == exam.persona_id))
     if exam.combined_score is not None:
         raise HTTPException(status_code=409, detail="Exam already submitted")
 
