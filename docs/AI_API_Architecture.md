@@ -6,7 +6,7 @@
 
 ## 1. API 호출 목적별 분류 및 모델 티어링
 
-앱 내에서 Claude API를 호출하는 시점은 총 5가지다.
+앱 내에서 Claude API를 호출하는 시점은 총 7가지다.
 
 | # | 호출 목적 | 시점 | 추천 모델 | 이유 |
 |---|---------|------|:--------:|------|
@@ -15,6 +15,8 @@
 | 3 | AI 학생 시험 응시 | 시험 응시 시 1회 | **Haiku** | 정해진 JSON 형식 출력, 단순 작업 |
 | 4 | 수업 품질 평가 | 세션 종료 시 1회 | **Haiku** | JSON 구조화 출력, 단순 분류 작업 |
 | 5 | 세션 요약 생성 | 세션 종료 시 1회 | **Haiku** | 단순 요약, 고품질 불필요 |
+| 6 | 약점 개념 복습 문제 생성 | 복습 화면 진입 시 1회 | **Sonnet** | 과목·개념에 맞는 문제·힌트 생성 |
+| 7 | 복습 답변 평가 (퍼지 채점) | 사용자 답변 제출마다 | **Sonnet** | 핵심 이해도 판별, 유연한 정답 인정 필요 |
 
 > Haiku는 Sonnet 대비 약 **20배 저렴**하다.
 > 호출 3·4·5를 Haiku로 대체하면 전체 비용의 약 **60~70% 절감** 가능.
@@ -29,7 +31,9 @@
 [Sonnet 호출]
   소크라테스 채팅 (10턴 × 평균 500토큰)   ≈  5,000 토큰
   시험 문제 생성                           ≈  2,000 토큰
-  소계                                    ≈  7,000 토큰
+  복습 문제 생성 (약점 1개당)              ≈    800 토큰
+  복습 답변 평가 (약점 1개당)              ≈    400 토큰
+  소계 (복습 포함)                         ≈  8,200 토큰
 
 [Haiku 호출]
   AI 학생 시험 응시                        ≈  1,500 토큰
@@ -38,8 +42,8 @@
   소계                                    ≈  3,500 토큰
 
 ─────────────────────────────────────────────────────────
-모델 티어링 적용 시 1 사이클 예상 비용      ≈  $0.03~0.08
-                                            (45~120원)
+모델 티어링 적용 시 1 사이클 예상 비용      ≈  $0.04~0.10
+                                            (60~150원)
 ```
 
 > 참고 단가 (2026년 4월 기준):
@@ -55,23 +59,31 @@
 ```
 [가르치기 세션]
   사용자 메시지 전송
-    → FastAPI: messages 배열에 추가
-    → Claude Sonnet (스트리밍)              ← Prompt 1
+    → FastAPI: messages 배열에 추가 (flag_modified로 JSONB 변경 추적)
+    → DB 저장 → Claude Sonnet (스트리밍, 멀티턴 messages 배열 전달)  ← Prompt 1
     → 응답 스트림 → React-Native 전달
+    → 스트리밍 완료 후 별도 DB 세션으로 assistant 메시지 저장
     → 10턴 도달 or 사용자 종료 시
     → Claude Haiku: 세션 요약               ← Prompt 5 → persona_memory 저장
     → Claude Haiku: 품질 평가              ← Prompt 4 → quality_score, weak_points 저장
 
 [단계 시험]
   사용자 "시험 요청" 클릭
-    → DB: 현재 단계 teaching 요약본 조회
-    → 캐시 시험지 있으면 재사용 (API 호출 없음)
-    → 없으면 Claude Sonnet: 시험 생성       ← Prompt 2
+    → DB: 현재 단계 teaching_sessions + StageCurriculumItem 조인 조회
+    → Claude Sonnet: 시험 생성 (가르친 개념 기반, max_tokens=1200) ← Prompt 2
+    → answer_key(1~5 인덱스) → 실제 보기 텍스트로 변환 후 DB 저장
     → 사용자 응시 (UI, API 호출 없음)
     → retention 계산 (서버 수학 연산, API 호출 없음)
-    → Claude Haiku: AI 학생 응시           ← Prompt 3
-    → 서버: 합산 채점 + 진급 판정 (API 호출 없음)
-    → DB: exam 저장, weak_point_tags 업데이트
+    → 서버: 합산 채점 + 진급 판정 (combined_score ≥ 70 통과)
+    → DB: exam 저장, weak_point_tags 업데이트 (오답 개념만 추가)
+
+[약점 개념 복습 (개념 사물함)]
+  사용자 "복습하기" 클릭
+    → Claude Sonnet: 과목·개념별 복습 문제·힌트 생성  ← Prompt 6
+    → 사용자 답변 입력 후 제출
+    → Claude Sonnet: 퍼지 채점 (핵심 파악 여부 판별)  ← Prompt 7
+    → 정답 시: WeakPointTag 삭제 + PersonaMemory.stability += 0.2
+    → 오답 시: 피드백만 반환 (태그 유지)
 ```
 
 ---
@@ -83,6 +95,11 @@
 ### Prompt 1 — 소크라테스 채팅 (Claude Sonnet / 스트리밍)
 
 **호출 시점**: 가르치기 세션에서 사용자가 메시지를 전송할 때마다
+
+> **멀티턴 구현 방식**: `user_content` 단일 문자열이 아닌 `messages: list[dict]` 배열 형태로 전달한다.
+> DB의 `TeachingSession.messages` JSONB 배열에서 최근 20개 메시지를 읽어 Claude API 형식(`[{"role": "user"|"assistant", "content": "..."}]`)으로 변환한다.
+> 연속된 같은 역할(role)의 메시지는 줄바꿈으로 병합하여 Claude API 제약(교대 역할 필수)을 준수한다.
+> `max_tokens=500`, JSONB 변경 후 반드시 `flag_modified(session, "messages")` 호출.
 
 **주입 데이터**:
 - `{subject_name}` : 과목명 (예: "웹 기초")
@@ -341,6 +358,70 @@ USER:
 [대화 내용]
 {session_messages}
 ```
+
+---
+
+### Prompt 6 — 약점 개념 복습 문제 생성 (Claude Sonnet)
+
+**호출 시점**: 개념 사물함에서 사용자가 "복습하기"를 눌렀을 때 1회
+
+**주입 데이터**:
+- `{concept}` : 약점 개념명 (WeakPointTag.concept)
+- `{subject_name}` : 과목명 — **수학으로 고정하지 않음**, 사용자가 설정한 과목명 사용
+
+```
+SYSTEM:
+너는 복습 문제 출제 전문가다.
+아래 개념에 대한 복습용 유사 문제, 단계별 힌트 3개, 핵심 개념 설명을 JSON으로만 출력해라.
+
+과목: {subject_name}
+개념: {concept}
+
+출력 JSON 스키마:
+{"problem":"문제 텍스트","hints":["힌트1","힌트2","힌트3"],
+"concept_title":"핵심 정리 제목","concept_explanation":"핵심 설명(2~3줄)"}
+
+조건:
+- problem: 해당 과목과 개념에 맞는 구체적인 문제 1개 (서술형 또는 단답형)
+- hints: 생각을 단계별로 유도하는 짧고 명확한 힌트 정확히 3개
+- concept_explanation: 핵심 내용/규칙을 2~3줄로 요약
+- 전부 한국어로 작성
+```
+
+---
+
+### Prompt 7 — 복습 답변 평가 (Claude Sonnet / 퍼지 채점)
+
+**호출 시점**: 사용자가 복습 답변을 제출할 때마다
+
+**주입 데이터**:
+- `{concept}` : 약점 개념명
+- `{subject_name}` : 과목명
+- `{problem}` : 복습 문제 텍스트
+- `{user_answer}` : 사용자 입력 답변
+
+```
+SYSTEM:
+학생의 복습 답변이 개념을 올바르게 이해하고 있는지 평가해라.
+완벽한 표현이 아니어도 핵심 내용을 담고 있으면 정답으로 인정해.
+
+과목: {subject_name}
+개념: {concept}
+문제: {problem}
+학생 답변: {user_answer}
+
+출력 JSON 스키마:
+{"is_correct":true,"feedback":"피드백(1~2문장)"}
+
+조건:
+- is_correct: 핵심을 파악했으면 true, 완전히 무관하거나 틀리면 false
+- feedback: 친근하고 격려하는 톤. 맞으면 칭찬+짧은 보충, 틀리면 힌트 제공
+- JSON만 출력
+```
+
+**정답 시 서버 처리**:
+1. `WeakPointTag` 삭제 (개념 사물함에서 제거)
+2. `PersonaMemory.stability = min(1.0, stability + 0.2)` (기억 유지율 증가)
 
 ---
 
