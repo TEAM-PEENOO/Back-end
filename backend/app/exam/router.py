@@ -1,4 +1,5 @@
 import json
+import random
 import uuid
 from datetime import datetime, timezone
 
@@ -11,7 +12,7 @@ from app.ai.prompts import build_exam_questions_prompt
 from app.common.audit import audit_event
 from app.common.rate_limit import rate_limit
 from app.common.weak_points import upsert_weak_point_tag
-from app.db.models import CurriculumItem, Exam, Persona, StageCurriculumItem, TeachingSession, WeakPointTag
+from app.db.models import CurriculumItem, Exam, Persona, PersonaMemory, StageCurriculumItem, TeachingSession, WeakPointTag
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.exam.schemas import CreateExamResponse, ExamQuestionOut, SubmitExamRequest, SubmitExamResponse
@@ -299,6 +300,24 @@ async def grade_exam_submission(
     if len(answers_input) != len(questions):
         raise HTTPException(status_code=400, detail="All questions must be answered before grade")
 
+    # 페르소나의 개념별 기억 안정도(stability) 로드
+    memory_rows = (
+        await db.scalars(
+            select(PersonaMemory).where(PersonaMemory.persona_id == persona.id)
+        )
+    ).all()
+    stability_map: dict[str, float] = {m.concept: m.stability for m in memory_rows}
+
+    def _persona_correct_prob(concept: str) -> float:
+        """stability → 정답 확률 (Ebbinghaus 망각 곡선 기반)"""
+        s = stability_map.get(concept, 0.5)
+        if s >= 0.7:
+            return 0.90   # 10% 오답
+        elif s >= 0.3:
+            return 0.55   # 45% 오답
+        else:
+            return 0.20   # 80% 오답
+
     user_correct = 0
     weak_points_updated: list[str] = []
     user_answers: list[dict] = []
@@ -322,11 +341,13 @@ async def grade_exam_submission(
                 "is_correct": ok,
             }
         )
-        persona_ok = (idx % 2 == 1)
+        concept_tag = str(q.get("concept_tag", ""))
+        prob = _persona_correct_prob(concept_tag)
+        persona_ok = random.random() < prob
         persona_answers.append(
             {
                 "question_id": item.question_id,
-                "thought": "기억이 좀 흐릿하지만 풀어볼게요." if not persona_ok else "이건 배운 기억이 있어요.",
+                "thought": "이건 배운 기억이 있어요!" if persona_ok else "기억이 좀 흐릿하지만 풀어볼게요.",
                 "answer": q.get("answer") if persona_ok else ("1" if str(q.get("answer")) != "1" else "2"),
                 "is_correct": persona_ok,
             }

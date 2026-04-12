@@ -20,7 +20,7 @@ from app.db.models import (
     WeakPointTag,
 )
 from app.ai.client import ClaudeClient
-from app.ai.prompts import build_practice_answer_eval_prompt, build_practice_prompt, build_socratic_system_prompt
+from app.ai.prompts import build_practice_answer_eval_prompt, build_practice_prompt, build_socratic_system_prompt, build_teaching_evaluator_prompt
 from app.common.weak_points import upsert_weak_point_tag
 from app.db.session import AsyncSessionLocal, get_db
 from app.deps import get_current_user_id
@@ -419,18 +419,50 @@ async def subject_session_end(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    user_msgs = [m for m in (session.messages or []) if m.get("role") == "user"]
+    all_msgs = list(session.messages or [])
+    user_msgs = [m for m in all_msgs if m.get("role") == "user"]
     total_chars = sum(len(str(m.get("content", ""))) for m in user_msgs)
-    score = 90 if total_chars >= 300 else (80 if total_chars >= 180 else (70 if total_chars >= 90 else 60))
 
+    # Claude 평가 시도 (haiku 모델로 비용 절감)
+    score = 0
     raw_weak: list[str] = []
-    if len(user_msgs) < 2:
-        raw_weak.append("설명 반복 부족")
-    if not any("?" in str(m.get("content", "")) for m in user_msgs):
-        raw_weak.append("확인 질문 부족")
-    if total_chars < 120:
-        raw_weak.append("예시 밀도 부족")
-    raw_weak = raw_weak[:5]
+    try:
+        transcript_lines = []
+        for m in all_msgs:
+            role_label = "선생님" if m.get("role") == "user" else "학생"
+            transcript_lines.append(f"{role_label}: {m.get('content', '')}")
+        transcript = "\n".join(transcript_lines)
+        concept = session.concept or "수학 개념"
+        eval_prompt = build_teaching_evaluator_prompt(concept=concept, transcript=transcript)
+        raw_eval = await _claude.complete_text(
+            system_prompt="너는 수업 평가 전문가야. JSON만 출력해.",
+            user_content=eval_prompt,
+            max_tokens=400,
+            model="claude-haiku-4-5-20251001",
+        )
+        text = raw_eval.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        eval_data = json.loads(text)
+        score = int(eval_data.get("score", 0))
+        raw_weak = [str(w) for w in eval_data.get("weak_points", [])][:5]
+    except Exception:
+        pass
+
+    # Claude 평가 실패 시 문자 수 기반 폴백 (max 90)
+    if score == 0:
+        score = 90 if total_chars >= 300 else (80 if total_chars >= 180 else (70 if total_chars >= 90 else 60))
+    if not raw_weak:
+        if len(user_msgs) < 2:
+            raw_weak.append("설명 반복 부족")
+        if not any("?" in str(m.get("content", "")) for m in user_msgs):
+            raw_weak.append("확인 질문 부족")
+        if total_chars < 120:
+            raw_weak.append("예시 밀도 부족")
+        raw_weak = raw_weak[:5]
 
     session.quality_score = score
     session.weak_points = [{"concept": w, "description": w} for w in raw_weak]
@@ -465,6 +497,9 @@ async def subject_session_end(
 
     retention_pct, _ = _calc_retention(memory_row.stability)
 
+    # 완전 기억(stability ≥ 0.9)까지 남은 세션 수 계산 (세션당 +0.1)
+    sessions_to_mastery = max(0, int((0.9 - memory_row.stability + 0.09) / 0.1)) if memory_row.stability < 0.9 else 0
+
     weak_points_out = [WeakPointOut(concept=w, description=w) for w in raw_weak]
     updated_memories = [
         UpdatedMemory(
@@ -472,6 +507,7 @@ async def subject_session_end(
             summary=memory_row.summary,
             taught_count=memory_row.taught_count,
             retention=retention_pct,
+            sessions_to_mastery=sessions_to_mastery,
         )
     ]
 

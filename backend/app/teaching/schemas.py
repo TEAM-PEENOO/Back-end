@@ -28,6 +28,7 @@ class UpdatedMemory(BaseModel):
     summary: str | None
     taught_count: int
     retention: float
+    sessions_to_mastery: int = 0  # 완전 기억(stability≥0.9)까지 남은 세션 수
 
 
 class EndSessionResponse(BaseModel):
