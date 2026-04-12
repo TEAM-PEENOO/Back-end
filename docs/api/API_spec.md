@@ -58,7 +58,8 @@ Authorization: Bearer <access_token>
 | 403 | `FORBIDDEN` | 다른 사용자의 리소스 접근 |
 | 404 | `NOT_FOUND` | 리소스 없음 |
 | 409 | `CONFLICT` | 중복 리소스 (이메일, 과목당 페르소나 등) |
-| 422 | `EXAM_LOCKED` | 시험 해금 조건 미충족 |
+| 422 | `EXAM_LOCKED` | 시험 해금 조건 미충족 (미학습 항목 존재 또는 직전 시험 오답 미해결) |
+| 422 | `EXAM_ALREADY_PASSED` | 이미 통과한 단계 — 재응시 불가 |
 | 500 | `INTERNAL_ERROR` | 서버 내부 오류 |
 
 ---
