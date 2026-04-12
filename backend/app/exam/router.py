@@ -35,6 +35,7 @@ async def _assert_exam_unlocked_by_stage(
     persona_id: uuid.UUID,
     stage_id: uuid.UUID,
 ) -> None:
+    # Check 1: 커리큘럼 전체 학습 완료 여부
     total = await db.scalar(select(func.count(StageCurriculumItem.stage_id)).where(StageCurriculumItem.stage_id == stage_id))
     taught = await db.scalar(
         select(func.count(func.distinct(TeachingSession.curriculum_item_id)))
@@ -52,6 +53,63 @@ async def _assert_exam_unlocked_by_stage(
                 "message": f"아직 가르치지 않은 항목이 {untaught_count}개 남았어요.",
             },
         )
+
+    # Check 2: 이미 통과한 단계 — 재응시 불가
+    already_passed = await db.scalar(
+        select(Exam).where(
+            Exam.persona_id == persona_id,
+            Exam.stage_id == stage_id,
+            Exam.passed == True,
+        )
+    )
+    if already_passed:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "EXAM_ALREADY_PASSED",
+                "message": "이미 통과한 단계예요. 더 이상 시험을 볼 수 없어요.",
+            },
+        )
+
+    # Check 3: 직전 시험 오답 미해결 시 lock
+    # 채점 완료된 가장 최근 시험을 조회
+    last_graded = await db.scalar(
+        select(Exam)
+        .where(
+            Exam.persona_id == persona_id,
+            Exam.stage_id == stage_id,
+            Exam.combined_score.is_not(None),
+        )
+        .order_by(Exam.created_at.desc())
+    )
+    if last_graded:
+        # 오답 문항의 concept_tag 수집
+        q_map = {q["id"]: q for q in (last_graded.questions or [])}
+        wrong_concepts: set[str] = {
+            q["concept_tag"]
+            for ans in (last_graded.user_answers or [])
+            if not ans.get("is_correct")
+            for q in [q_map.get(ans.get("question_id", ""), {})]
+            if q.get("concept_tag")
+        }
+        if wrong_concepts:
+            remaining = int(
+                await db.scalar(
+                    select(func.count(WeakPointTag.id)).where(
+                        WeakPointTag.persona_id == persona_id,
+                        WeakPointTag.concept.in_(wrong_concepts),
+                    )
+                ) or 0
+            )
+            if remaining > 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "EXAM_LOCKED",
+                        "message": f"개념 사물함에 미해결 약점이 {remaining}개 있어요. 먼저 복습을 완료해주세요.",
+                        "remaining_weak_points": remaining,
+                    },
+                )
 
 
 async def _generate_exam_questions(
