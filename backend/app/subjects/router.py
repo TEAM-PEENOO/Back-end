@@ -2,7 +2,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,7 @@ from app.db.models import (
 from app.ai.client import ClaudeClient
 from app.ai.prompts import build_socratic_system_prompt
 from app.common.weak_points import upsert_weak_point_tag
-from app.db.session import get_db
+from app.db.session import AsyncSessionLocal, get_db
 from app.deps import get_current_user_id
 
 _claude = ClaudeClient()
@@ -189,6 +189,17 @@ async def delete_subject(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     row = await _get_subject(db, subject_id=subject_id, user_id=user_id)
+
+    # Persona.current_stage_id → stages.id (no ondelete) 로 인한 FK 위반 방지:
+    # 삭제 전에 current_stage_id를 NULL로 만들고, Exam(stage_id FK)도 먼저 삭제
+    persona = await db.scalar(select(Persona).where(Persona.subject_id == row.id))
+    if persona:
+        persona.current_stage_id = None
+        exams = (await db.scalars(select(Exam).where(Exam.persona_id == persona.id))).all()
+        for exam in exams:
+            await db.delete(exam)
+        await db.flush()
+
     await db.delete(row)
     await db.commit()
 
@@ -355,17 +366,22 @@ async def subject_session_chat(
                 full_reply.append(token)
                 yield f"data: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
         except Exception:
-            pass  # 스트리밍 중 오류 발생 시 지금까지 수집된 내용 저장
+            # Claude API 오류 시 silent 처리 대신 폴백 메시지 전송
+            fallback = "잠깐, 다시 한번 설명해줄래요?"
+            full_reply.append(fallback)
+            yield f"data: {json.dumps({'text': fallback}, ensure_ascii=False)}\n\n"
 
-        # 완성된 응답을 DB에 저장 (session 재조회로 만료 문제 방지)
+        # 완성된 응답을 DB에 저장
+        # StreamingResponse 반환 후 원래 db 세션이 닫힐 수 있으므로 새 세션 사용
         reply = "".join(full_reply)
         if reply:
-            fresh = await db.scalar(select(TeachingSession).where(TeachingSession.id == session_id_val))
-            if fresh:
-                msgs = list(fresh.messages or [])
-                msgs.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
-                fresh.messages = msgs
-                await db.commit()
+            async with AsyncSessionLocal() as fresh_db:
+                fresh = await fresh_db.scalar(select(TeachingSession).where(TeachingSession.id == session_id_val))
+                if fresh:
+                    msgs = list(fresh.messages or [])
+                    msgs.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
+                    fresh.messages = msgs
+                    await fresh_db.commit()
 
         yield "data: {}\n\n"
 
@@ -1270,6 +1286,7 @@ async def reorder_stages(
 
 @router.post("/{subject_id}/stages/{stage_id}/exams", response_model=ExamOut)
 async def create_stage_exam(
+    request: Request,
     subject_id: uuid.UUID,
     stage_id: uuid.UUID,
     user_id: str = Depends(get_current_user_id),
@@ -1293,15 +1310,8 @@ async def create_stage_exam(
     ).all() if stage_item_ids else []
     level_hint = max(1, min(9, len(stage_items) or 1))
 
-    class _Req:
-        state = type("obj", (), {"request_id": None})()
-        headers = {}
-        url = None
-        method = "POST"
-        client = None
-
     create_resp = await _create_regular_exam(
-        request=_Req(),
+        request=request,
         db=db,
         persona=persona,
         user_id=user_id,
