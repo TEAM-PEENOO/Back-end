@@ -11,7 +11,6 @@ class ExamQuestionOut(BaseModel):
 
 class CreateExamResponse(BaseModel):
     exam_id: str
-    level: int
     questions: list[ExamQuestionOut]
 
 
@@ -29,8 +28,6 @@ class SubmitExamResponse(BaseModel):
     persona_score: int
     combined_score: int
     passed: bool
-    level_before: int
-    level_after: int
     weak_points_updated: list[str]
 
 

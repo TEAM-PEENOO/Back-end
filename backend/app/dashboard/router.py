@@ -35,9 +35,8 @@ async def home(
         retention_summary = 0.0
     profile = profile_for(persona.personality)
     return HomeResponse(
-        level=1,
         retention_summary=retention_summary,
-        next_goal=f"정규시험 통과 목표: 합산 {profile.pass_combined}+",
+        next_goal=f"단계 시험 통과 목표: 합산 {profile.pass_combined}+",
         recent_session_count=recent_cnt,
     )
 
@@ -86,8 +85,6 @@ async def exam_history(
     return [
         ExamHistoryItem(
             exam_id=str(r.id),
-            exam_type="regular",
-            level=1,
             combined_score=r.combined_score,
             passed=r.passed,
             created_at=r.created_at.isoformat(),

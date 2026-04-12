@@ -72,28 +72,18 @@ def build_practice_answer_eval_prompt(
     )
 
 
-def build_placement_question_prompt(*, level: int, concept: str) -> str:
-    return (
-        "한국 교육과정 수학 배치고사 문제 1개를 JSON으로만 생성해라.\n"
-        f"레벨: {level} (1=초1 ... 9=중3)\n"
-        f"개념: {concept}\n"
-        "스키마:\n"
-        '{"content":"","options":["","","","",""],"answer_key":"1","concept_tag":""}\n'
-        "조건: options는 5개, answer_key는 1~5 문자열."
-    )
-
-
 def build_exam_questions_prompt(
     *,
-    level: int,
+    subject_name: str,
     taught_concepts: list[str],
     weak_tags: list[str],
 ) -> str:
     taught_text = ", ".join(taught_concepts) if taught_concepts else "없음"
     weak_text = ", ".join(weak_tags) if weak_tags else "없음"
     return (
-        "학생이 실제로 가르친 내용 기반의 수학 정규시험 5문항을 JSON으로만 생성해라.\n"
-        f"레벨: {level} (1=초1 ... 9=중3)\n"
+        f"과목: {subject_name}\n"
+        "학생이 실제로 가르친 내용만을 기반으로 시험 5문항을 JSON으로만 생성해라.\n"
+        "교과서나 외부 지식을 사용하지 않는다. 오직 아래 '학생이 학습한 개념' 범위 안에서만 출제한다.\n"
         f"학생이 학습한 개념: {taught_text}\n"
         f"누적 약점 개념(우선 출제): {weak_text}\n"
         "스키마:\n"
@@ -104,6 +94,6 @@ def build_exam_questions_prompt(
         "- 객관식 3, 단답형 2\n"
         "- difficulty 1~3\n"
         "- 객관식 answer_key는 1~5 문자열\n"
-        "- 오직 '학생이 학습한 개념' 범위 안에서만 출제"
+        "- 약점 개념이 있으면 해당 개념에서 최소 2문항 출제"
     )
 
