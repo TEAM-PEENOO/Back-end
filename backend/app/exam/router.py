@@ -258,13 +258,14 @@ async def save_user_answers_only(
     payload: SubmitExamRequest,
     user_id: str,
     db: AsyncSession,
+    persona_id: uuid.UUID | None = None,
 ) -> None:
-    # user_id 소유 퍼소나면 어떤 과목 퍼소나든 허용 (과목별 퍼소나 지원)
-    exam = await db.scalar(
-        select(Exam)
-        .join(Persona, Persona.id == Exam.persona_id)
-        .where(Exam.id == exam_id, Persona.user_id == user_id)
-    )
+    # persona_id가 직접 주어지면 그걸 사용, 없으면 user_id로 fallback
+    if persona_id is not None:
+        exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona_id))
+    else:
+        persona = await _get_persona(db, user_id)
+        exam = await db.scalar(select(Exam).where(Exam.id == exam_id, Exam.persona_id == persona.id))
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     questions = list(exam.questions or [])
