@@ -823,8 +823,8 @@ async def submit_subject_exam_answers(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await _get_subject(db, subject_id=subject_id, user_id=user_id)
-    await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
-    await save_user_answers_only(exam_id=exam_id, payload=payload, user_id=user_id, db=db)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
+    await save_user_answers_only(exam_id=exam_id, payload=payload, user_id=user_id, db=db, persona_id=persona.id)
     return {"exam_id": str(exam_id), "user_answers_saved": True}
 
 
@@ -852,6 +852,17 @@ async def grade_subject_exam(
     if len(answers_input) != len(questions):
         raise HTTPException(status_code=400, detail="All questions must be answered before grading")
 
+    import random
+    # PersonaMemory stability로 AI 정답 확률 결정 (Ebbinghaus 망각 곡선)
+    memory_rows = (await db.scalars(select(PersonaMemory).where(PersonaMemory.persona_id == persona.id))).all()
+    stability_map: dict[str, float] = {m.concept: m.stability for m in memory_rows}
+
+    def _persona_correct_prob(concept: str) -> float:
+        s = stability_map.get(concept, 0.5)
+        if s >= 0.7:   return 0.90
+        elif s >= 0.3: return 0.55
+        else:          return 0.20
+
     user_correct = 0
     wrong_concepts: list[str] = []
     user_answers_out: list[dict] = []
@@ -871,10 +882,11 @@ async def grade_subject_exam(
             wrong_concepts.append(concept)
             await upsert_weak_point_tag(db, persona_id=persona.id, concept=concept)
         user_answers_out.append({"question_id": question_id, "answer": answer, "is_correct": ok})
-        persona_ok = (idx % 2 == 1)
+        concept_tag = str(q.get("concept_tag", ""))
+        persona_ok = random.random() < _persona_correct_prob(concept_tag)
         persona_answers_out.append({
             "question_id": question_id,
-            "thought": "이건 배운 기억이 있어요." if persona_ok else "기억이 좀 흐릿하지만 풀어볼게요.",
+            "thought": "이건 배운 기억이 있어요!" if persona_ok else "기억이 좀 흐릿하지만 풀어볼게요.",
             "answer": q.get("answer") if persona_ok else ("1" if str(q.get("answer")) != "1" else "2"),
             "is_correct": persona_ok,
         })
