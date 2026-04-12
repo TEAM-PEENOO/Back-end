@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import asc, desc, func, select, update
+from sqlalchemy import asc, desc, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -1464,12 +1464,12 @@ async def delete_stage(
         raise HTTPException(status_code=404, detail="Stage not found")
     if stage.passed:
         raise HTTPException(status_code=403, detail="Passed stage cannot be deleted")
-    # FK 제약 해소: Persona.current_stage_id NULL 처리, Exam 레코드 삭제
-    await db.execute(update(Persona).where(Persona.current_stage_id == stage_id).values(current_stage_id=None))
-    exams = (await db.scalars(select(Exam).where(Exam.stage_id == stage_id))).all()
-    for exam in exams:
-        await db.delete(exam)
-    await db.delete(stage)
+    # raw SQL로 FK 참조를 순서대로 정리 후 삭제 (CASCADE 미설정 환경 포함)
+    sid = str(stage_id)
+    await db.execute(text("UPDATE personas SET current_stage_id = NULL WHERE current_stage_id = :sid"), {"sid": sid})
+    await db.execute(text("DELETE FROM exams WHERE stage_id = :sid"), {"sid": sid})
+    await db.execute(text("DELETE FROM stage_curriculum_items WHERE stage_id = :sid"), {"sid": sid})
+    await db.execute(text("DELETE FROM stages WHERE id = :sid"), {"sid": sid})
     await db.commit()
 
 
