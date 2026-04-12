@@ -437,8 +437,8 @@ async def subject_session_end(
     user_msgs = [m for m in all_msgs if m.get("role") == "user"]
     total_chars = sum(len(str(m.get("content", ""))) for m in user_msgs)
 
-    # Claude 평가 시도 (haiku 모델로 비용 절감)
-    score = 0
+    # Claude 평가 시도
+    score: int | None = None
     raw_weak: list[str] = []
     try:
         transcript_lines = []
@@ -452,7 +452,6 @@ async def subject_session_end(
             system_prompt="너는 수업 평가 전문가야. JSON만 출력해.",
             user_content=eval_prompt,
             max_tokens=400,
-            model="claude-haiku-4-5-20251001",
         )
         text = raw_eval.strip()
         if "```" in text:
@@ -467,7 +466,7 @@ async def subject_session_end(
         pass
 
     # Claude 평가 실패 시 문자 수 기반 폴백 (max 90)
-    if score == 0:
+    if score is None:
         score = 90 if total_chars >= 300 else (80 if total_chars >= 180 else (70 if total_chars >= 90 else 60))
     if not raw_weak:
         if len(user_msgs) < 2:
