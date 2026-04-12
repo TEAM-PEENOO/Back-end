@@ -1260,6 +1260,37 @@ DELETE /subjects/{subject_id}/persona/weak-points/{tag_id}
 
 ---
 
+### 9-4. 약점 개념 복습 콘텐츠 생성
+
+```
+POST /subjects/{subject_id}/persona/weak-points/{tag_id}/practice
+```
+
+> Claude AI가 해당 과목·개념에 맞는 복습 문제, 단계별 힌트, 핵심 개념 설명을 생성하여 반환한다.  
+> PracticeScreen("개념 사물함 → 복습하기")에서 호출됨.
+
+**Response `200`**
+```json
+{
+  "data": {
+    "concept": "진지한 여가",
+    "fail_count": 2,
+    "problem": "여가 활동이 '진지한 여가'로 발전했을 때 나타날 수 있는 사회적 이점을 두 가지 서술하시오.",
+    "hints": [
+      "개인의 취미가 전문성으로 이어지는 과정을 생각해봐요",
+      "그 활동이 다른 사람들과 어떤 관계를 만드는지 떠올려봐요",
+      "경제적·사회적 기여 측면에서도 생각해봐요"
+    ],
+    "concept_title": "진지한 여가 핵심 정리",
+    "concept_explanation": "진지한 여가란 단순 휴식이 아닌 꾸준한 노력과 기술 습득을 동반하는 여가 활동이에요.\n취미가 전문성으로 발전하면 원데이 클래스, 커뮤니티 형성 등 사회적 가치를 창출할 수 있어요."
+  }
+}
+```
+
+**Error `404`** — Weak point tag not found
+
+---
+
 ## 10. 진행 현황 (Progress)
 
 ### 10-1. 과목 전체 진행 현황
@@ -1414,6 +1445,7 @@ GET /subjects/{subject_id}/stages/{stage_id}/exam-history
 | `GET` | `/subjects/{id}/persona/weak-points` | 약점 태그 목록 |
 | `GET` | `/subjects/{id}/persona/weak-points/{tag_id}` | 약점 태그 단건 조회 |
 | `DELETE` | `/subjects/{id}/persona/weak-points/{tag_id}` | 약점 태그 삭제 |
+| `POST` | `/subjects/{id}/persona/weak-points/{tag_id}/practice` | 약점 개념 복습 콘텐츠 생성 (AI) |
 | `GET` | `/subjects/{id}/progress` | 과목 전체 진행 현황 |
 | `GET` | `/subjects/{id}/stages/{stage_id}/exam-history` | 단계 시험 이력 |
 

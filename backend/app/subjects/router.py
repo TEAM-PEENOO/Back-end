@@ -20,7 +20,7 @@ from app.db.models import (
     WeakPointTag,
 )
 from app.ai.client import ClaudeClient
-from app.ai.prompts import build_socratic_system_prompt
+from app.ai.prompts import build_practice_prompt, build_socratic_system_prompt
 from app.common.weak_points import upsert_weak_point_tag
 from app.db.session import AsyncSessionLocal, get_db
 from app.deps import get_current_user_id
@@ -528,6 +528,56 @@ async def get_subject_weak_point(
         "fail_count": row.fail_count,
         "last_failed_at": row.last_failed_at.isoformat(),
         "created_at": row.created_at.isoformat(),
+    }
+
+
+@router.post("/{subject_id}/persona/weak-points/{tag_id}/practice")
+async def get_weak_point_practice(
+    subject_id: uuid.UUID,
+    tag_id: uuid.UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """약점 개념에 대한 Claude 생성 복습 문제·힌트·핵심 개념 설명 반환."""
+    subject = await _get_subject(db, subject_id=subject_id, user_id=user_id)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
+    row = await db.scalar(select(WeakPointTag).where(WeakPointTag.id == tag_id, WeakPointTag.persona_id == persona.id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Weak point tag not found")
+
+    prompt = build_practice_prompt(concept=row.concept, subject_name=subject.name)
+    try:
+        raw = await _claude.complete_text(
+            system_prompt="너는 학생의 약점 개념 복습을 도와주는 전문 교육 AI야. 복습 문제, 힌트, 핵심 개념 설명을 JSON으로만 출력해.",
+            user_content=prompt,
+            max_tokens=700,
+        )
+        text = raw.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        data: dict = json.loads(text)
+    except Exception:
+        data = {
+            "problem": f"{row.concept}와 관련된 문제를 선생님이 직접 출제해주세요.",
+            "hints": [
+                "기본 정의부터 다시 떠올려봐요",
+                "간단한 예시로 직접 생각해봐요",
+                "선생님께 다시 설명해달라고 해봐요",
+            ],
+            "concept_title": f"{row.concept} 핵심 정리",
+            "concept_explanation": f"{row.concept}은(는) 중요한 개념이에요. 선생님이 다시 한번 설명해주시면 이해할 수 있을 것 같아요!",
+        }
+
+    return {
+        "concept": row.concept,
+        "fail_count": row.fail_count,
+        "problem": data.get("problem", ""),
+        "hints": data.get("hints", [])[:3],
+        "concept_title": data.get("concept_title", f"{row.concept} 핵심 정리"),
+        "concept_explanation": data.get("concept_explanation", ""),
     }
 
 

@@ -37,6 +37,22 @@ def build_teaching_evaluator_prompt(*, concept: str, transcript: str) -> str:
     )
 
 
+def build_practice_prompt(*, concept: str, subject_name: str) -> str:
+    return (
+        "다음 개념에 대한 복습용 유사 문제, 단계별 힌트 3개, 핵심 개념 설명을 JSON으로만 출력해라.\n"
+        f"과목: {subject_name}\n"
+        f"개념: {concept}\n"
+        "출력 JSON 스키마:\n"
+        '{"problem":"문제 텍스트","hints":["힌트1","힌트2","힌트3"],'
+        '"concept_title":"핵심 정리 제목","concept_explanation":"핵심 설명(2~3줄)"}\n'
+        "조건:\n"
+        "- problem: 해당 과목과 개념에 맞는 구체적인 문제 1개 (서술형 또는 단답형)\n"
+        "- hints: 생각을 단계별로 유도하는 짧고 명확한 힌트 정확히 3개\n"
+        "- concept_explanation: 핵심 내용/규칙을 2~3줄로 요약\n"
+        "- 전부 한국어로 작성"
+    )
+
+
 def build_placement_question_prompt(*, level: int, concept: str) -> str:
     return (
         "한국 교육과정 수학 배치고사 문제 1개를 JSON으로만 생성해라.\n"
