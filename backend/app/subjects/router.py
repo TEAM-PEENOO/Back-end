@@ -1219,6 +1219,18 @@ async def delete_curriculum_item(
     row = await db.scalar(select(CurriculumItem).where(CurriculumItem.id == item_id, CurriculumItem.subject_id == subject_id))
     if not row:
         raise HTTPException(status_code=404, detail="Curriculum item not found")
+    # FK 위반 방지: ondelete 없이 선언된 FK 컬럼을 먼저 NULL로 처리
+    await db.execute(
+        TeachingSession.__table__.update()
+        .where(TeachingSession.curriculum_item_id == item_id)
+        .values(curriculum_item_id=None)
+    )
+    await db.execute(
+        PersonaMemory.__table__.update()
+        .where(PersonaMemory.curriculum_item_id == item_id)
+        .values(curriculum_item_id=None)
+    )
+    await db.flush()
     await db.delete(row)
     await db.commit()
 
@@ -1458,6 +1470,14 @@ async def delete_stage(
         raise HTTPException(status_code=404, detail="Stage not found")
     if stage.passed:
         raise HTTPException(status_code=403, detail="Passed stage cannot be deleted")
+    # FK 위반 방지: ondelete 없이 선언된 FK 컬럼을 먼저 처리
+    await db.execute(
+        Persona.__table__.update()
+        .where(Persona.current_stage_id == stage_id)
+        .values(current_stage_id=None)
+    )
+    await db.execute(Exam.__table__.delete().where(Exam.stage_id == stage_id))
+    await db.flush()
     await db.delete(stage)
     await db.commit()
 
