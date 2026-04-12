@@ -19,7 +19,7 @@ from app.teaching.router import router as teaching_router
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="My Jeja API", version="0.1.0")
+    app = FastAPI(title="Teach-U API", version="0.1.0")
 
     if settings.sentry_dsn:
         sentry_sdk.init(

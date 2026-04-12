@@ -1,199 +1,363 @@
-# 나의 제자 (My Jeja)
+# Teach-U (티츄) — Backend
 
 > **"가르치면서 내가 더 배운다. 내 제자가 성장하면, 나도 성장한다."**
-
-바이브코딩 공모전 출품작 — AI활용 차세대 교육 솔루션
-
----
-
-## 한 줄 소개
-
-**사용자가 AI 학생을 직접 가르치고, 함께 시험을 치르며 성장시키는 역할 역전형 교육 앱**
+>
+> 바이브코딩 AI활용 차세대 교육 솔루션 공모전 출품작
 
 ---
 
-## 왜 만들었나요?
+## 1. 프로젝트 소개
 
-기존 AI 교육 앱은 모두 같은 방향입니다.
+**Teach-U (티츄)** 는 기존 AI 교육 앱의 방향을 완전히 역전한 모바일 학습 앱입니다.
 
 ```
-기존:      AI  ──→  사용자   (AI가 설명, 사용자가 수동적으로 학습)
-나의 제자:  사용자 ──→  AI   (사용자가 설명, AI가 질문으로 응답)
+기존 AI 교육앱:   AI  ────▶  사용자   (AI가 가르치고, 사용자는 수동적으로 학습)
+Teach-U:       사용자 ────▶  AI 학생  (사용자가 가르치고, AI가 배우는 학생)
 ```
 
-교육학 연구에 따르면, **남에게 가르칠 때 기억 유지율이 90%** 에 달합니다 (NTL 교육 피라미드).
-반면 강의를 듣거나 읽는 방식은 5~10%에 그칩니다.
+사용자는 자신이 오늘 배운 내용을 **AI 학생 페르소나**에게 직접 설명합니다. AI는 소크라테스 문답법으로 질문하며, 사용자 스스로 오개념과 논리 빈틈을 발견하게 합니다.
 
-나의 제자는 이 원리를 그대로 앱에 이식했습니다.
+### 핵심 메커니즘
+
+| 메커니즘 | 설명 | 교육학 근거 |
+|---------|------|-----------|
+| **역할 역전** | 사용자가 AI에게 개념을 설명 | 파인만 기법 (Feynman Technique) |
+| **페르소나 책임감** | AI 학생을 성장시키는 감정적 유대 | 프로테제 효과 (Protégé Effect) |
+| **망각 시뮬레이션** | AI 학생이 에빙하우스 곡선으로 기억을 잃어감 | 에빙하우스 망각 곡선 (1885) |
+| **커리큘럼 자유** | 사용자가 과목·단계·항목을 직접 설계 | 자기결정이론 (SDT) |
+| **합산 시험** | 사용자와 AI 학생이 같은 시험을 치름 | 협력 학습 |
+
+### 차별화 포인트
+
+- **어떤 과목이든 가능** — 수학, 웹개발, 역사, 외국어 등 사용자가 직접 과목 생성
+- **AI가 실제로 배우고 잊음** — DB + 수학 공식으로 구현한 가짜 망각이 아닌 구조화된 기억 시뮬레이션
+- **약점 개념 사물함** — 시험 오답이 자동으로 복습 큐에 쌓이고 Claude가 맞춤 문제 생성
 
 ---
 
-## 핵심 기능
+## 2. 기술 스택
 
-### 1. 배치고사 — 내 수준에서 시작하기
+| 레이어 | 기술 | 버전 |
+|--------|------|------|
+| **웹 프레임워크** | FastAPI | 0.115.6 |
+| **ORM** | SQLAlchemy (async) | 2.0.37 |
+| **DB 마이그레이션** | Alembic | 1.14.1 |
+| **데이터베이스** | PostgreSQL | (Railway) |
+| **AI** | Claude API (Anthropic) | claude-sonnet-4-6 |
+| **인증** | JWT (python-jose) + Google OAuth | — |
+| **Rate Limiting** | Redis | — |
+| **모니터링** | Sentry | 2.19.2 |
+| **런타임** | Python | 3.11 |
+| **배포** | Railway | — |
 
-처음 시작 시 적응형 테스트(10~12문제)로 실제 학습 수준을 측정합니다.
-결과에 따라 AI 학생의 시작 레벨이 자동으로 설정됩니다.
+---
 
-```
-초4 문제 정답 → 초5로 상향
-초5 문제 오답 → 초4로 확정
-→ 약 10문제 만에 내 수준 파악 완료
-```
+## 3. 시작하기
 
-### 2. 가르치기 세션 — 내가 선생님이 된다
+### 사전 요구사항
 
-오늘 배운 개념을 AI 학생에게 설명합니다.
-AI 학생은 소크라테스식 질문만으로 응답하며, 사용자 스스로 오개념을 발견하도록 유도합니다.
+- Python 3.11+
+- PostgreSQL (또는 Railway 연결)
+- Redis (Rate Limiting용, 없으면 in-memory fallback 동작)
+- Anthropic API Key
 
-```
-사용자:    "소수를 나눌 때는 소수점을 맞춰서 나눠야 해"
-AI 학생:   "그럼 0.6 ÷ 0.2는 소수점을 어떻게 맞추나요?"
-사용자:    "10을 곱해서 6 ÷ 2 = 3으로 만들면 돼"
-AI 학생:   "아, 그럼 항상 10을 곱하면 되는 건가요?" ← 의도적 오류 삽입
-사용자:    "아니, 소수 자릿수에 따라 달라져"           ← 오개념 스스로 수정
-```
+### 환경 변수 설정
 
-수업이 끝나면 **수업 품질 점수(0~100)** 와 누락된 개념이 피드백됩니다.
-
-### 3. 망각 곡선 — AI 학생도 잊어버린다
-
-AI 학생은 에빙하우스 망각 곡선을 따라 배운 내용을 점점 잊어갑니다.
-
-| 마지막 수업 후 | 기억률 |
-|:------------:|:-----:|
-| 1일 이내 | 95% 🟢 |
-| 2~3일 | 75% 🟡 |
-| 4~7일 | 50% 🟠 |
-| 8~14일 | 25% 🔴 |
-| 15일 이상 | 10% ⚫ |
-
-잊어가는 제자를 위해 다시 가르치는 과정이 곧 **사용자 자신의 복습**이 됩니다.
-
-### 4. 함께 시험 치르기 — 둘 다 같은 시험지를 푼다
-
-AI 학생의 현재 레벨에 맞는 시험이 자동 생성됩니다.
-사용자와 AI 학생이 **동시에** 같은 시험지를 풀고, 합산 점수로 레벨업 여부가 결정됩니다.
-
-```
-합산 점수 = (사용자 점수 × 60%) + (AI 학생 점수 × 40%)
-
-레벨업 조건:
-  합산 75점 이상  +  사용자 최소 50점  +  AI 학생 최소 30점
+```env
+DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
+JWT_SECRET=your-strong-jwt-secret
+JWT_ISSUER=my-jeja
+JWT_AUDIENCE=my-jeja-client
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-sonnet-4-6
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+GOOGLE_OAUTH_REDIRECT_URI=https://your-backend.up.railway.app/api/v1/auth/google/callback
+GOOGLE_APP_REDIRECT_DEFAULT=exp://your-expo-redirect
+REDIS_URL=redis://localhost:6379
+APP_ENV=dev
+CORS_ALLOW_ORIGINS=http://localhost:8081,https://your-frontend.com
+ALLOWED_HOSTS=localhost,your-backend.up.railway.app
 ```
 
-AI 학생은 자신의 기억 상태를 바탕으로 "생각 텍스트"와 함께 답안을 작성합니다.
+### 로컬 실행
+
+```bash
+# 1. 의존성 설치
+cd backend
+pip install -r requirements.txt
+
+# 2. DB 마이그레이션
+alembic upgrade head
+
+# 3. 서버 시작
+uvicorn app.main:app --reload --port 8000
+```
+
+### API 헬스 체크
+
+```bash
+curl https://your-backend.up.railway.app/api/v1/health
+# → {"status": "ok"}
+```
+
+### Railway 배포
+
+```bash
+railway login
+railway up
+```
+
+환경 변수는 Railway 대시보드의 Variables 탭에서 설정합니다.
+
+---
+
+## 4. API 레퍼런스
+
+> 전체 명세: [`docs/API_spec.md`](docs/API_spec.md)
+>
+> Base URL: `https://<railway-domain>/api/v1`
+> 인증: `Authorization: Bearer <access_token>` (모든 엔드포인트)
+
+### 주요 엔드포인트 요약
+
+#### 인증 (Auth)
 
 ```
-"선생님이 소수점 자릿수 얘기하셨는데...
- 100을 곱해야 하나, 10을 곱해야 하나..."  → 오답 (기억률 45%)
+POST /auth/register          # 이메일 회원가입
+POST /auth/login             # 로그인 → JWT 반환
+GET  /auth/google/url        # Google OAuth URL 반환
+POST /auth/google/code       # Google 인가 코드 교환 → JWT 반환
+GET  /auth/me                # 내 정보 조회
 ```
 
-### 5. 레벨업 & 졸업 연출
-
-합산 점수 기준을 넘으면 AI 학생이 다음 학년으로 올라갑니다.
+#### 과목·커리큘럼·단계
 
 ```
-"선생님, 저 6학년 됐어요!
- 분수랑 소수는 이제 자신있어요. 다음엔 비율 배우고 싶어요!"
+GET  /subjects                                    # 과목 목록 (페르소나 포함)
+POST /subjects                                    # 과목 생성
+POST /subjects/{id}/curriculum                    # 커리큘럼 항목 추가
+POST /subjects/{id}/stages                        # 단계 생성
+```
+
+#### 가르치기 세션 (SSE 스트리밍)
+
+```
+POST /subjects/{id}/persona/sessions              # 세션 시작
+POST /subjects/{id}/persona/sessions/{sid}/chat   # 채팅 전송 (SSE 스트림 반환)
+POST /subjects/{id}/persona/sessions/{sid}/end    # 세션 종료 + 자동 평가
+```
+
+```javascript
+// SSE 수신 예시 (프론트엔드)
+const res = await fetch('/api/v1/subjects/.../sessions/.../chat', {
+  method: 'POST',
+  headers: { Authorization: 'Bearer ...', 'Content-Type': 'application/json' },
+  body: JSON.stringify({ message: 'HTML이란 웹 페이지의 뼈대를 만드는 언어야' }),
+});
+const reader = res.body.getReader();
+// event: token / event: done 형식으로 수신
+```
+
+#### 시험
+
+```
+POST /exams                  # 시험 생성 (가르친 내용 기반 Claude 문제 생성)
+POST /exams/{exam_id}/submit # 답안 제출 + 채점 + 진급 판정
+```
+
+#### 약점 복습 (개념 사물함)
+
+```
+GET  /subjects/{id}/persona/weak-points                           # 약점 태그 목록
+POST /subjects/{id}/persona/weak-points/{tag_id}/practice         # Claude 복습 문제 생성
+POST /subjects/{id}/persona/weak-points/{tag_id}/practice/submit  # 답변 제출 + 퍼지 채점
+```
+
+**복습 제출 예시:**
+
+```json
+// POST .../practice/submit
+// Request
+{ "problem": "HTML의 시맨틱 태그가 필요한 이유를 설명하시오.", "answer": "검색 엔진이 내용을 구조적으로 이해할 수 있어서요" }
+
+// Response
+{ "is_correct": true, "feedback": "핵심을 잘 잡았어요! 접근성 향상도 중요한 이유 중 하나예요." }
 ```
 
 ---
 
-## 학습자 개성 시스템
-
-AI 학생은 4가지 개성 중 하나를 가집니다.
-개성에 따라 망각 속도, 질문 스타일, 레벨업 난이도가 달라집니다.
-
-| 개성 | 특징 | 망각 속도 | 레벨업 조건 |
-|:---:|------|:--------:|:---------:|
-| 🔵 호기심쟁이 | 질문 폭발, 에너지 넘침 | 보통 | 합산 75점 |
-| 🟢 신중이 | 느리게 배우지만 오래 기억 | 느림 (×0.7) | 합산 70점 |
-| 🟡 덤벙이 | 빠르지만 금방 잊음 | 빠름 (×1.5) | 합산 80점 |
-| 🔴 완벽주의자 | 심화까지 파야 직성이 풀림 | 느림 (×0.8) | 합산 85점 + 보너스 |
-
----
-
-## 성장 경로
-
-초등학교 1학년부터 중학교 3학년까지 총 9단계 (MVP 기준)
+## 5. 프로젝트 구조
 
 ```
-초1 → 초2 → 초3 → 초4 → 초5 → 초6 → 중1 → 중2 → 중3
-```
-
-레벨마다 한국 교육과정에 맞는 실제 시험 문제가 자동 생성됩니다.
-
----
-
-## 기술 스택
-
-| 영역 | 기술 |
-|------|------|
-| 모바일 앱 | React-Native (Expo) |
-| 백엔드 API | FastAPI (Python) |
-| AI | Anthropic Claude API (claude-sonnet-4-6) |
-| 데이터베이스 | PostgreSQL |
-| 배포 | Railway |
-
----
-
-## 교육학적 근거
-
-| 이론 | 내용 | 앱 적용 |
-|------|------|--------|
-| **파인만 기법** | 쉽게 설명할 수 있어야 진짜 아는 것 | 사용자가 AI에게 직접 설명 |
-| **프로테제 효과** | 가르친다는 생각이 학습 깊이 향상 | AI 학생에 대한 감정적 책임감 |
-| **에빙하우스 망각 곡선** | 복습 없이는 기억이 빠르게 감소 | AI 학생의 기억 상태에 직접 적용 |
-
----
-
-## 기존 서비스와의 차별화
-
-| 서비스 | 방식 |
-|-------|------|
-| 콴다, 매스프레소 | AI가 문제를 풀어줌 |
-| 뤼이드 | AI가 약점을 찾아줌 |
-| Khan Academy AI | AI가 소크라테스 질문을 함 |
-| Duolingo | 반복 훈련 게임화 |
-| **나의 제자** | **사용자가 AI 학생을 가르치고, 함께 시험을 침** |
-
----
-
-## 문서 구조
-
-```
-PROVE/
-├── README.md                  ← 지금 읽고 있는 파일
+_vibeContest_Back/
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI 앱 팩토리 (미들웨어, 라우터 등록)
+│   │   ├── config.py            # 환경 변수 (pydantic-settings)
+│   │   ├── deps.py              # 공통 의존성 (JWT 검증, DB 세션)
+│   │   ├── ai/
+│   │   │   ├── client.py        # ClaudeClient (stream_text / complete_text)
+│   │   │   └── prompts.py       # Claude 프롬프트 빌더 7종
+│   │   ├── auth/                # Google OAuth + JWT 인증
+│   │   ├── subjects/            # 과목·커리큘럼·단계·페르소나·가르치기 세션·약점 복습
+│   │   ├── exam/                # 시험 생성·채점·진급 판정
+│   │   ├── persona/             # 페르소나 CRUD
+│   │   ├── dashboard/           # 진행 현황 집계
+│   │   ├── common/
+│   │   │   ├── audit.py         # 감사 로그
+│   │   │   ├── rate_limit.py    # Redis Rate Limiter
+│   │   │   ├── security.py      # 보안 헤더, RequestContext 미들웨어
+│   │   │   └── weak_points.py   # 약점 태그 upsert 헬퍼
+│   │   ├── db/
+│   │   │   ├── models.py        # SQLAlchemy ORM 모델
+│   │   │   └── session.py       # async DB 세션
+│   │   └── engines/
+│   │       └── forgetting_curve.py  # 에빙하우스 망각 곡선 계산
+│   ├── migrations/              # Alembic 마이그레이션
+│   └── requirements.txt
 └── docs/
-    ├── proposal.md            ← 최종 기획 제안서 (전체 상세 내용)
-    ├── initial_idea.md        ← 50인 페르소나 × 50 페인포인트 × 매트릭스
-    ├── initial_idea_2.md      ← 제약 조건 반영 재기획 (1주일 + 창의성 우선)
-    ├── surved_initial_idea.md ← 게임화 통합 및 비판적 보완
-    ├── prompt_history.md      ← AI 협업 프롬프트 전체 로그
-    ├── instruction.md         ← AI 프롬프트 엔지니어링 지침서 (5종)
-    ├── db_schema.sql          ← MVP PostgreSQL 스키마
-    ├── api_spec.yaml          ← MVP OpenAPI 3.0 명세
-    └── architecture.md        ← MVP 시스템 아키텍처
+    ├── instruction.md           # AI 협업 운영 지침 (SSoT)
+    ├── API_spec.md              # 전체 REST API 명세
+    ├── AI_API_Architecture.md   # Claude 호출 설계 + 프롬프트 7종
+    ├── main_logic.md            # 핵심 구현 로직 (기억률, 시험, 복습)
+    ├── DB_Schema.md             # DB 스키마 설계
+    ├── deployment_checklist.md  # Railway 배포 체크리스트
+    ├── design_UXUI_plan.md      # UI/UX 설계
+    ├── prompt_history.md        # 기획 단계 LLM 대화 기록
+    └── proposal.md              # 공모전 기획 제안서
 ```
 
-> 전체 상세 기획서는 [`docs/proposal.md`](docs/proposal.md)를 참고하세요.
-> 구현 시작용 설계 문서: [`docs/db_schema.sql`](docs/db_schema.sql), [`docs/api_spec.yaml`](docs/api_spec.yaml), [`docs/architecture.md`](docs/architecture.md)
+---
+
+## 6. 심사기준에 따른 차별성 강조
+
+### 기술적 완성도
+
+| 항목 | 구현 내용 |
+|------|---------|
+| **SSE 스트리밍** | FastAPI `StreamingResponse` + async generator로 Claude 응답을 토큰 단위로 실시간 전달 |
+| **멀티턴 대화** | DB JSONB에 messages 배열 저장, 최근 20개 히스토리로 Claude API 호출 (역할 교대 자동 병합) |
+| **Claude 7종 프롬프트** | 소크라테스 채팅·시험 생성·품질 평가·요약·복습 문제·퍼지 채점 등 목적별 분리 설계 |
+| **망각 곡선 엔진** | `retention = e^(-t/S)` 실시간 계산, stability는 복습/가르치기 횟수에 비례 증가 |
+| **보안** | JWT issuer/audience 검증, 시험 answer_key 채점 후 즉시 폐기, Rate Limit, 보안 헤더 |
+| **모델 티어링** | Sonnet(대화·시험) vs Haiku(평가·요약) — 비용 60~70% 절감 |
+
+### AI 활용 능력 및 효율성
+
+- **프롬프트 목적별 분리**: 7가지 Claude 호출이 각각 독립된 프롬프트 빌더 함수로 관리
+- **퍼지 채점**: 정확한 표현이 아닌 "핵심 이해도"를 Claude가 평가 — 단순 문자열 비교 탈피
+- **subject_name 동적 주입**: 특정 과목을 하드코딩하지 않고 사용자 정의 과목명 주입
+- **Prompt Caching 준비**: 고정 텍스트에 `cache_control` 적용 구조 (비용 추가 절감 가능)
+
+### 기획력 및 실무 접합성
+
+- **교육학 3이론 기반 설계**: 파인만 기법 + 프로테제 효과 + 에빙하우스 망각 곡선
+- **50인 가상 페르소나** 인터뷰 기반 페인포인트 도출 (`docs/proposal.md`)
+- **커리큘럼 전권 이양**: "사용자가 교수이자 선생님" — 어떤 분야든 자신만의 학습 설계
+
+### 창의성
+
+- "AI가 가르친다" → **"사용자가 AI를 가르친다"** 라는 전례 없는 역전 구조
+- 망각 곡선을 가진 AI 학생이 실제로 배우고 잊는 시뮬레이션
+- 사용자·AI 학생이 **함께 같은 시험**을 치르는 합산 채점 메커니즘
 
 ---
 
-## AI 협업 리포트
+## 7. 시스템 아키텍처 구조
 
-본 프로젝트는 기획 단계부터 AI(Claude Sonnet 4.6)와 협업하여 진행되었습니다.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          클라이언트                                    │
+│                   React Native (Expo) App                            │
+│           iOS / Android / Web (expo-web-browser)                     │
+└─────────────────────────┬───────────────────────────────────────────┘
+                          │  HTTPS + JWT Bearer
+                          ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        FastAPI Backend                               │
+│                   (Railway — Python 3.11)                            │
+│                                                                      │
+│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐              │
+│  │  Auth 모듈   │  │  Subjects 모듈 │  │   Exam 모듈   │              │
+│  │ Google OAuth │  │ 과목·커리큘럼  │  │ 생성·채점·진급  │              │
+│  │ JWT 발급/검증 │  │ 단계·세션·복습 │  │ answer_key폐기 │              │
+│  └─────────────┘  └──────────────┘  └───────────────┘              │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │                      AI 서비스 레이어                           │   │
+│  │  ClaudeClient.stream_text()  ←── SSE 스트리밍 (가르치기 채팅)   │   │
+│  │  ClaudeClient.complete_text() ←── JSON 출력 (시험·평가·복습)    │   │
+│  │                                                                │   │
+│  │  Prompt 1: 소크라테스 채팅 (Sonnet)                             │   │
+│  │  Prompt 2: 시험 문제 생성 (Sonnet)                              │   │
+│  │  Prompt 3: AI 학생 응시 (Haiku / 현재 서버 로직)                 │   │
+│  │  Prompt 4: 수업 품질 평가 (Haiku)                               │   │
+│  │  Prompt 5: 세션 요약 생성 (Haiku)                               │   │
+│  │  Prompt 6: 복습 문제 생성 (Sonnet)                              │   │
+│  │  Prompt 7: 복습 답변 퍼지 채점 (Sonnet)                          │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ┌──────────────────┐  ┌────────────────────────────────────────┐   │
+│  │  공통 인프라       │  │       망각 곡선 엔진                      │   │
+│  │ Rate Limit(Redis)│  │  retention = e^(-t / stability)         │   │
+│  │ 감사 로그(audit)  │  │  stability ↑ 가르치기/복습 횟수에 비례     │   │
+│  │ 보안 헤더         │  │                                        │   │
+│  └──────────────────┘  └────────────────────────────────────────┘   │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+            ┌──────────────┴──────────────┐
+            ▼                             ▼
+┌─────────────────────┐       ┌─────────────────────┐
+│    PostgreSQL        │       │    Claude API        │
+│    (Railway)         │       │   (Anthropic)        │
+│                      │       │                      │
+│ users                │       │  claude-sonnet-4-6   │
+│ subjects             │       │  claude-haiku-4-5    │
+│ curriculum_items     │       │                      │
+│ stages               │       └─────────────────────┘
+│ personas             │
+│ persona_memory       │
+│ teaching_sessions    │
+│ exams                │
+│ weak_point_tags      │
+└─────────────────────┘
+```
 
-- **기획**: 50인 가상 페르소나로 교육 현장 페인포인트 도출 → 실현가능성·시장성·창의성 매트릭스로 아이디어 압축
-- **재기획**: 1주일 개발 제약 + 창의성 우선 조건 반영 → 역발상 아이디어 도출
-- **보완**: 게임화 아이디어를 교육학·게임 심리학·기술 구현 가능성 3축으로 비판적 검토
-- **프롬프트 엔지니어링**: 소크라테스 교사, 배치고사 생성기, 시험 생성기, 망각 기반 응시, 수업 품질 평가자 5종 설계
+### 핵심 데이터 흐름
 
-> 상세 협업 과정 → [`docs/prompt_history.md`](docs/prompt_history.md)
-> 프롬프트 설계 지침 → [`docs/instruction.md`](docs/instruction.md)
+```
+[가르치기 → 기억 저장]
+  사용자 메시지
+    → DB 저장 (flag_modified) → Claude SSE 스트리밍
+    → 세션 종료 시 Claude Haiku: 요약 + 품질 평가
+    → persona_memory 업데이트 (stability 증가)
+
+[시험 → 진급]
+  시험 요청
+    → 가르친 개념 조회 → Claude Sonnet: 5문항 생성
+    → 합산 채점 (user×0.6 + persona×0.4)
+    → combined ≥ 70 → 진급 / 미만 → weak_point_tags 추가
+
+[복습 → 약점 해소]
+  복습 요청
+    → Claude Sonnet: 문제·힌트·개념 설명 생성
+    → 사용자 답변 → Claude Sonnet: 퍼지 채점
+    → 정답: WeakPointTag 삭제 + stability += 0.2
+```
 
 ---
 
-*바이브코딩 공모전 | TEAM PEENOO*
+## 8. 마무리
+
+**Teach-U (티츄)** 는 단순한 AI 챗봇 교육 도구가 아닙니다.
+
+"가르치는 것이 최고의 학습법"이라는 수십 년간 검증된 교육학 원리를 AI와 접목하여, 사용자가 자신의 학습을 주도적으로 설계하고 AI 학생을 성장시키면서 자신도 함께 성장하는 **새로운 형태의 교육 경험**을 제안합니다.
+
+> **Frontend Repository**: [TEAM-PEENOO/Front-end](https://github.com/TEAM-PEENOO/Front-end)
+> **Backend Repository**: [TEAM-PEENOO/Back-end](https://github.com/TEAM-PEENOO/Back-end)
+
+---
+
+*제작: 태훈 × Claude Sonnet 4.6 (바이브코딩)*
+*공모전: 바이브코딩 AI활용 차세대 교육 솔루션*
