@@ -7,9 +7,9 @@
 > ```sh
 > # 공유 문서 전체 동기화
 > rsync -av docs/instruction.md ../vibeContest/docs/
-> rsync -av docs/architecture/{main_logic,AI_API_Architecture,DB_Schema}.md ../vibeContest/docs/
-> rsync -av docs/api/API_spec.md ../vibeContest/docs/
-> rsync -av docs/planning/{prompt_history,proposal}.md ../vibeContest/docs/
+> rsync -av docs/architecture/{main_logic,AI_API_Architecture,DB_Schema}.md ../vibeContest/docs/architecture/
+> rsync -av docs/api/API_spec.md ../vibeContest/docs/api/
+> rsync -av docs/planning/{prompt_history,proposal}.md ../vibeContest/docs/planning/
 > ```
 
 ---
