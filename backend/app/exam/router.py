@@ -335,7 +335,7 @@ async def grade_exam_submission(
     user_score = int((user_correct / max(len(questions), 1)) * 100)
     persona_score = int((sum(1 for p in persona_answers if p["is_correct"]) / max(len(questions), 1)) * 100)
     combined = int((user_score * 0.6) + (persona_score * 0.4))
-    passed = combined >= 75 and user_score >= 50 and persona_score >= 30
+    passed = combined >= 70
 
     exam.user_answers = user_answers
     exam.persona_answers = persona_answers
