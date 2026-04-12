@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.client import ClaudeClient
@@ -338,6 +339,7 @@ async def save_user_answers_only(
             raise HTTPException(status_code=400, detail=f"Question not in exam: {item.question_id}")
         user_answers.append({"question_id": item.question_id, "answer": item.answer})
     exam.user_answers = user_answers
+    flag_modified(exam, "user_answers")
     await db.commit()
 
 

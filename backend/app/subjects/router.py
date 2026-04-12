@@ -889,7 +889,9 @@ async def grade_subject_exam(
     passed = combined >= pass_threshold
 
     exam.user_answers = user_answers_out
+    flag_modified(exam, "user_answers")
     exam.persona_answers = persona_answers_out
+    flag_modified(exam, "persona_answers")
     exam.user_score = user_score
     exam.persona_score = persona_score
     exam.combined_score = combined
@@ -899,6 +901,7 @@ async def grade_subject_exam(
     for q in questions:
         q["answer"] = None
     exam.questions = questions
+    flag_modified(exam, "questions")
 
     # Update next_stage_id if passed
     next_stage_id: str | None = None
@@ -1461,6 +1464,11 @@ async def delete_stage(
         raise HTTPException(status_code=404, detail="Stage not found")
     if stage.passed:
         raise HTTPException(status_code=403, detail="Passed stage cannot be deleted")
+    # FK 제약 해소: Persona.current_stage_id NULL 처리, Exam 레코드 삭제
+    await db.execute(update(Persona).where(Persona.current_stage_id == stage_id).values(current_stage_id=None))
+    exams = (await db.scalars(select(Exam).where(Exam.stage_id == stage_id))).all()
+    for exam in exams:
+        await db.delete(exam)
     await db.delete(stage)
     await db.commit()
 
