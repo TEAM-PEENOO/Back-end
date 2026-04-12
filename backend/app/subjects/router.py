@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import asc, desc, func, select, text, update
+from sqlalchemy import asc, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -1222,10 +1222,12 @@ async def delete_curriculum_item(
     row = await db.scalar(select(CurriculumItem).where(CurriculumItem.id == item_id, CurriculumItem.subject_id == subject_id))
     if not row:
         raise HTTPException(status_code=404, detail="Curriculum item not found")
-    # FK 제약 해소: curriculum_item_id 참조 레코드를 먼저 NULL 처리 후 삭제
-    await db.execute(update(TeachingSession).where(TeachingSession.curriculum_item_id == item_id).values(curriculum_item_id=None))
-    await db.execute(update(PersonaMemory).where(PersonaMemory.curriculum_item_id == item_id).values(curriculum_item_id=None))
-    await db.delete(row)
+    # raw SQL로 FK 참조를 순서대로 정리 후 삭제 (CASCADE 미설정 환경 포함)
+    cid = str(item_id)
+    await db.execute(text("UPDATE teaching_sessions SET curriculum_item_id = NULL WHERE curriculum_item_id = :cid"), {"cid": cid})
+    await db.execute(text("UPDATE persona_memory SET curriculum_item_id = NULL WHERE curriculum_item_id = :cid"), {"cid": cid})
+    await db.execute(text("DELETE FROM stage_curriculum_items WHERE curriculum_item_id = :cid"), {"cid": cid})
+    await db.execute(text("DELETE FROM curriculum_items WHERE id = :cid"), {"cid": cid})
     await db.commit()
 
 
@@ -1435,9 +1437,9 @@ async def patch_stage(
     if "order_index" in payload and payload["order_index"] is not None:
         stage.order_index = int(payload["order_index"])
     if "curriculum_item_ids" in payload and isinstance(payload["curriculum_item_ids"], list):
-        old_links = (await db.scalars(select(StageCurriculumItem).where(StageCurriculumItem.stage_id == stage.id))).all()
-        for link in old_links:
-            await db.delete(link)
+        # DELETE 먼저 flush 후 INSERT — unique constraint 위반 방지
+        await db.execute(text("DELETE FROM stage_curriculum_items WHERE stage_id = :sid"), {"sid": str(stage.id)})
+        await db.flush()
         for raw_id in payload["curriculum_item_ids"]:
             try:
                 item_id = uuid.UUID(str(raw_id))
