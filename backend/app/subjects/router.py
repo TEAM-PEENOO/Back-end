@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.models import (
     CurriculumItem,
@@ -333,6 +334,7 @@ async def subject_session_chat(
     messages = list(session.messages or [])
     messages.append({"role": "user", "content": payload.message, "timestamp": datetime.now(timezone.utc).isoformat()})
     session.messages = messages
+    flag_modified(session, "messages")  # JSONB mutation 명시적 마킹
     await db.commit()
 
     # 스트리밍 중 DB 세션 만료를 피하기 위해 필요한 값을 미리 캡처
@@ -342,13 +344,27 @@ async def subject_session_chat(
     session_concept = session.concept
     messages_snapshot = list(messages)  # commit 후 만료된 session 대신 로컬 복사본 사용
 
-    # 대화 히스토리를 컨텍스트로 구성 (최근 20턴)
+    # Claude API multi-turn messages 배열 구성 (최근 20턴)
+    # messages_snapshot 마지막 항목이 방금 추가한 user 메시지이므로 그대로 사용
     recent = messages_snapshot[-20:]
-    history_text = "\n".join(
-        f"{'선생님' if m['role'] == 'user' else persona_name}: {m['content']}"
+    api_messages = [
+        {"role": m["role"], "content": m["content"]}
         for m in recent
-    )
-    user_content = f"대화 기록:\n{history_text}\n\n선생님의 마지막 설명: {payload.message}"
+        if m.get("role") in ("user", "assistant") and m.get("content")
+    ]
+    # Claude API는 user로 시작 + 마지막이 user여야 함
+    # assistant로 시작하는 경우 제거
+    while api_messages and api_messages[0]["role"] != "user":
+        api_messages.pop(0)
+    # 연속된 같은 role 제거 (혹시 저장 실패로 user-user 쌍이 쌓인 경우 대비)
+    deduped: list[dict] = []
+    for msg in api_messages:
+        if deduped and deduped[-1]["role"] == msg["role"]:
+            # 같은 role이 연속되면 합치기
+            deduped[-1]["content"] += "\n" + msg["content"]
+        else:
+            deduped.append(dict(msg))
+    api_messages = deduped
 
     system_prompt = build_socratic_system_prompt(
         persona_name=persona_name,
@@ -361,7 +377,8 @@ async def subject_session_chat(
         try:
             async for token in _claude.stream_text(
                 system_prompt=system_prompt,
-                user_content=user_content,
+                messages=api_messages,
+                max_tokens=500,
             ):
                 full_reply.append(token)
                 yield f"data: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
@@ -381,6 +398,7 @@ async def subject_session_chat(
                     msgs = list(fresh.messages or [])
                     msgs.append({"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()})
                     fresh.messages = msgs
+                    flag_modified(fresh, "messages")  # JSONB mutation 명시적 마킹
                     await fresh_db.commit()
 
         yield "data: {}\n\n"
