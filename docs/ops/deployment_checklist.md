@@ -24,10 +24,9 @@
 - Run migrations in order:
   - `alembic upgrade head`
 - Confirm tables exist:
-  - `users`, `personas`, `teaching_sessions`, `teaching_messages`
-  - `persona_concepts`, `weak_point_tags`
-  - `subjects`, `curriculum_items`, `stages`, `stage_curriculum_items`
-  - `exams`, `exam_questions`, `exam_answers`
+  - `users`, `subjects`, `curriculum_items`, `stages`, `stage_curriculum_items`
+  - `personas`, `persona_memory`, `teaching_sessions`
+  - `exams`, `weak_point_tags`
 
 ## 3) API Health / Security
 
@@ -40,7 +39,7 @@
   - AI-heavy endpoints throttled
 - Multi-instance mode uses Redis-backed counters (not in-memory only)
 - Host header validation is active (`ALLOWED_HOSTS`)
-- Exam submit purges `exam_questions.answer_key`
+- Exam submit purges `exams.questions[].answer`
 - Response security headers present:
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`
@@ -56,7 +55,6 @@
   - open `/api/v1/auth/google/login?redirecturi=<frontend-callback>`
   - confirm callback receives `access_token` query param
   - call `/api/v1/auth/me` successfully
-- Start placement -> answer until completed
 - Create teaching session -> send message -> stream -> finish
 - Create exam -> submit -> receive user/persona/combined score
 - Dashboard endpoints return expected data
@@ -72,5 +70,5 @@
 - Do not expose internal stack traces in API responses
 - Audit log events appear for:
   - `auth.register`, `auth.login`
-  - `placement.start`, `placement.finish`
-  - `exam.submit`
+  - `teaching.session.start`, `teaching.session.finish`
+  - `exam.create`, `exam.submit`
