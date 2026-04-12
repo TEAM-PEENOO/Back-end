@@ -20,7 +20,7 @@ from app.db.models import (
     WeakPointTag,
 )
 from app.ai.client import ClaudeClient
-from app.ai.prompts import build_practice_prompt, build_socratic_system_prompt
+from app.ai.prompts import build_practice_answer_eval_prompt, build_practice_prompt, build_socratic_system_prompt
 from app.common.weak_points import upsert_weak_point_tag
 from app.db.session import AsyncSessionLocal, get_db
 from app.deps import get_current_user_id
@@ -581,6 +581,79 @@ async def get_weak_point_practice(
     }
 
 
+@router.post("/{subject_id}/persona/weak-points/{tag_id}/practice/submit")
+async def submit_practice_answer(
+    subject_id: uuid.UUID,
+    tag_id: uuid.UUID,
+    payload: dict,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """복습 답변을 Claude로 채점. 정답이면 weak point 삭제 + PersonaMemory retention 갱신."""
+    subject = await _get_subject(db, subject_id=subject_id, user_id=user_id)
+    persona = await _get_subject_persona(db, subject_id=subject_id, user_id=user_id)
+    row = await db.scalar(select(WeakPointTag).where(WeakPointTag.id == tag_id, WeakPointTag.persona_id == persona.id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Weak point tag not found")
+
+    problem: str = payload.get("problem", "")
+    user_answer: str = (payload.get("answer") or "").strip()
+    if not user_answer:
+        raise HTTPException(status_code=400, detail="answer is required")
+
+    prompt = build_practice_answer_eval_prompt(
+        concept=row.concept,
+        subject_name=subject.name,
+        problem=problem,
+        user_answer=user_answer,
+    )
+    try:
+        raw = await _claude.complete_text(
+            system_prompt="너는 학생 답변을 평가하는 교육 AI야. JSON만 출력해.",
+            user_content=prompt,
+            max_tokens=200,
+        )
+        text = raw.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        result: dict = json.loads(text)
+        is_correct: bool = bool(result.get("is_correct", False))
+        feedback: str = result.get("feedback", "")
+    except Exception:
+        # 파싱 실패 시 보수적으로 오답 처리
+        is_correct = False
+        feedback = "답변을 평가하지 못했어요. 다시 시도해봐요!"
+
+    if is_correct:
+        # 1) PersonaMemory retention 갱신 (stability +0.2)
+        memory = await db.scalar(
+            select(PersonaMemory).where(
+                PersonaMemory.persona_id == persona.id,
+                PersonaMemory.concept == row.concept,
+            )
+        )
+        if memory:
+            memory.stability = min(1.0, memory.stability + 0.2)
+            memory.last_taught_at = datetime.now(timezone.utc)
+        else:
+            db.add(PersonaMemory(
+                persona_id=persona.id,
+                curriculum_item_id=None,
+                concept=row.concept,
+                summary=None,
+                taught_count=1,
+                stability=0.7,
+            ))
+        # 2) WeakPointTag 삭제
+        await db.delete(row)
+        await db.commit()
+
+    return {"is_correct": is_correct, "feedback": feedback}
+
+
 @router.delete("/{subject_id}/persona/weak-points/{tag_id}", status_code=204)
 async def delete_subject_weak_point(
     subject_id: uuid.UUID,
@@ -751,8 +824,8 @@ async def grade_subject_exam(
     user_score = int((user_correct / max(len(questions), 1)) * 100)
     persona_score = int((sum(1 for p in persona_answers_out if p["is_correct"]) / max(len(questions), 1)) * 100)
     combined = int((user_score * 0.6) + (persona_score * 0.4))
-    pass_threshold = 75
-    passed = combined >= pass_threshold and user_score >= 50 and persona_score >= 30
+    pass_threshold = 70
+    passed = combined >= pass_threshold
 
     exam.user_answers = user_answers_out
     exam.persona_answers = persona_answers_out
