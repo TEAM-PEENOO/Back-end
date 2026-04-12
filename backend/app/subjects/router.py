@@ -191,16 +191,38 @@ async def delete_subject(
 ) -> None:
     row = await _get_subject(db, subject_id=subject_id, user_id=user_id)
 
-    # Persona.current_stage_id → stages.id (no ondelete) 로 인한 FK 위반 방지:
-    # 삭제 전에 current_stage_id를 NULL로 만들고, Exam(stage_id FK)도 먼저 삭제
+    # FK 위반 방지를 위해 참조 레코드를 역순으로 먼저 삭제
+
+    # 1) 이 과목에 속한 모든 curriculum_item id 수집
+    curriculum_item_ids = (
+        await db.scalars(
+            select(CurriculumItem.id)
+            .join(StageCurriculumItem, StageCurriculumItem.curriculum_item_id == CurriculumItem.id)
+            .join(Stage, Stage.id == StageCurriculumItem.stage_id)
+            .where(Stage.subject_id == row.id)
+        )
+    ).all()
+
+    # 2) teaching_sessions: curriculum_item_id FK (no ondelete) → 먼저 삭제
+    if curriculum_item_ids:
+        teaching_sessions = (
+            await db.scalars(
+                select(TeachingSession).where(TeachingSession.curriculum_item_id.in_(curriculum_item_ids))
+            )
+        ).all()
+        for ts in teaching_sessions:
+            await db.delete(ts)
+
+    # 3) Persona.current_stage_id → stages.id FK (no ondelete) → NULL 처리
+    # 4) Exam: persona_id FK → 먼저 삭제
     persona = await db.scalar(select(Persona).where(Persona.subject_id == row.id))
     if persona:
         persona.current_stage_id = None
         exams = (await db.scalars(select(Exam).where(Exam.persona_id == persona.id))).all()
         for exam in exams:
             await db.delete(exam)
-        await db.flush()
 
+    await db.flush()
     await db.delete(row)
     await db.commit()
 
