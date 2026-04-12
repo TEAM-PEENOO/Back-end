@@ -1,8 +1,16 @@
-# 지침서 (Instruction Guide) — 나의 제자 (My Jeja)
+# 지침서 (Instruction Guide) — Teach-U (티츄)
 
 > **이 문서는 모든 공유 문서의 Single Source of Truth(SSoT)입니다.**
 > 공유 문서를 수정할 때는 반드시 **백엔드 레포에서 먼저 수정**하고, 이후 프론트엔드 레포로 동기화합니다.
-> 동기화 명령: `rsync -av docs/{AI_API_Architecture,API_spec,main_logic,instruction,prompt_history,DB_Schema}.md ../vibeContest/docs/`
+>
+> 동기화 명령 (백엔드 레포 루트에서):
+> ```sh
+> # 공유 문서 전체 동기화
+> rsync -av docs/instruction.md ../vibeContest/docs/
+> rsync -av docs/architecture/{main_logic,AI_API_Architecture,DB_Schema}.md ../vibeContest/docs/architecture/
+> rsync -av docs/api/API_spec.md ../vibeContest/docs/api/
+> rsync -av docs/planning/{prompt_history,proposal}.md ../vibeContest/docs/planning/
+> ```
 
 ---
 
@@ -18,11 +26,11 @@
 매 기능 업데이트마다 문서들에 대하여 업데이트를 해야 할 것이 있으면 무조건 진행할 것.
 
 구체적 기준:
-- 새 API 엔드포인트 추가 → API_spec.md 즉시 업데이트
-- 새 Claude 프롬프트 추가/변경 → AI_API_Architecture.md + instruction.md 즉시 업데이트
-- 핵심 로직 변경 (채점 기준, 기억률 계산, 진급 조건 등) → main_logic.md 즉시 업데이트
-- DB 스키마 변경 → DB_Schema.md 즉시 업데이트
-- 공유 문서 수정 후 → 프론트엔드 레포로 반드시 동기화
+- 새 API 엔드포인트 추가          → docs/api/API_spec.md 즉시 업데이트
+- 새 Claude 프롬프트 추가/변경    → docs/architecture/AI_API_Architecture.md + instruction.md 즉시 업데이트
+- 핵심 로직 변경 (채점·기억률·진급) → docs/architecture/main_logic.md 즉시 업데이트
+- DB 스키마 변경                  → docs/architecture/DB_Schema.md + docs/api/db_schema.sql 즉시 업데이트
+- 공유 문서 수정 후               → 프론트엔드 레포로 반드시 동기화 (위 rsync 명령 사용)
 
 문서 업데이트를 기능 구현 이후로 미루는 것은 허용하지 않는다.
 기능 구현 커밋과 문서 업데이트 커밋은 같은 세션에 진행한다.
@@ -33,22 +41,37 @@
 ### 0-2. 중복 문서 관리 규칙 (Single Source of Truth)
 
 ```
-공유 문서(AI_API_Architecture.md, API_spec.md, main_logic.md, instruction.md,
-prompt_history.md, DB_Schema.md)의 원본은 백엔드 레포에만 있다.
+공유 문서의 원본은 백엔드 레포에만 있다.
 
-수정 순서:
-1. 백엔드 레포 docs/ 에서 수정
-2. 프론트엔드 레포 docs/ 로 동기화
+[백엔드 docs/ 구조 — SSoT]
+docs/
+├── instruction.md          ← 이 파일 (SSoT 루트)
+├── architecture/
+│   ├── main_logic.md
+│   ├── AI_API_Architecture.md
+│   └── DB_Schema.md
+├── api/
+│   ├── API_spec.md
+│   └── db_schema.sql
+├── planning/
+│   ├── proposal.md
+│   ├── prompt_history.md
+│   └── design_UXUI_plan.md
+└── ops/
+    └── deployment_checklist.md
 
-동기화 방법 (백엔드 레포 루트에서 실행):
-rsync -av docs/{AI_API_Architecture,API_spec,main_logic,instruction,prompt_history,DB_Schema}.md \
-  ../vibeContest/docs/
+[프론트엔드 docs/ 구조 — 미러]
+docs/
+├── instruction.md          ← 백엔드 복사본 (SSoT 안내 포함)
+├── main_logic.md           ← 백엔드 복사본
+├── AI_API_Architecture.md  ← 백엔드 복사본
+├── DB_Schema.md            ← 백엔드 복사본 (선택)
+├── API_spec.md             ← 백엔드 복사본
+├── prompt_history.md       ← 백엔드 복사본
+├── design_UXUI/            ← 프론트 전용
+└── design_initial_idea/    ← 프론트 전용
 
-또는 특정 파일만:
-cp docs/API_spec.md ../vibeContest/docs/API_spec.md
-
-장기 개선 방향: git submodule로 shared-docs 레포를 분리하여
-두 레포에서 공통으로 참조하는 구조로 전환.
+장기 개선 방향: git submodule로 shared-docs 레포를 분리.
 ```
 
 ---
@@ -70,11 +93,6 @@ cp docs/API_spec.md ../vibeContest/docs/API_spec.md
 - 기존 파일 수정 → Edit 사용 (Write는 전체 내용을 전송하므로 비효율)
 - 신규 파일 생성 또는 전체 재작성만 → Write 사용
 - 검색은 Glob/Grep 우선, Bash의 find/grep 사용 금지
-
-[컨텍스트 보존]
-- 불필요한 파일 탐색을 최소화한다.
-- 이미 아는 파일 경로는 바로 Read/Edit한다.
-- 광범위한 탐색이 필요할 때만 Explore 에이전트를 활용한다.
 
 [코드 작성 원칙]
 - 요청된 범위 밖의 리팩터링, 개선, 주석 추가를 하지 않는다.
@@ -100,7 +118,7 @@ cp docs/API_spec.md ../vibeContest/docs/API_spec.md
 ### 1-1. 앱 개요
 
 ```
-앱 이름: 나의 제자 (My Jeja)
+앱 이름: Teach-U (티츄)
 핵심 개념: "AI를 가르치면 내가 더 잘 배운다" (프로테제 효과 + 파인만 기법)
 차별점: 사용자가 AI 학생 페르소나를 가르치고, 함께 시험을 치르는 역전 구조
 과목: 사용자가 직접 정의 (수학 고정 아님 — 어떤 과목이든 가능)
@@ -165,25 +183,27 @@ Claude가 반환하는 answer_key는 "1"~"5" 인덱스 문자열이다.
 
 ## SECTION 2 — 문서 목록 & 역할
 
-| 파일 | 위치 | 역할 | SSoT |
-|------|------|------|------|
-| `instruction.md` | 공유 | AI 협업 규칙, 프로젝트 현황, 운영 지침 | 백엔드 |
-| `API_spec.md` | 공유 | 전체 REST API 명세 | 백엔드 |
-| `AI_API_Architecture.md` | 공유 | Claude API 호출 설계, 프롬프트 명세, 비용 추정 | 백엔드 |
-| `main_logic.md` | 공유 | 핵심 구현 로직 (기억률, 시험, 복습 흐름) | 백엔드 |
-| `DB_Schema.md` | 공유 | 데이터베이스 스키마 | 백엔드 |
-| `prompt_history.md` | 공유 | 기획 단계 LLM 대화 기록 | 백엔드 |
-| `proposal.md` | 공유 | 기획서 | 백엔드 |
-| `design_UXUI_plan.md` | 공유 | UI/UX 설계 | 백엔드 |
-| `design_UXUI/` | 프론트엔드 전용 | 화면별 상세 UX 설계 | 프론트 |
-| `design_initial_idea/` | 프론트엔드 전용 | 초기 아이디어 기록 | 프론트 |
+| 경로 | 역할 | SSoT |
+|------|------|------|
+| `instruction.md` | AI 협업 규칙, 프로젝트 현황, 운영 지침 | 백엔드 루트 |
+| `architecture/main_logic.md` | 핵심 구현 로직 (기억률, 시험, 복습 흐름) | 백엔드 |
+| `architecture/AI_API_Architecture.md` | Claude API 호출 설계, 프롬프트 7종 명세 | 백엔드 |
+| `architecture/DB_Schema.md` | 데이터베이스 스키마 설계 | 백엔드 |
+| `api/API_spec.md` | 전체 REST API 명세 | 백엔드 |
+| `api/db_schema.sql` | DDL 전체 (PostgreSQL) | 백엔드 |
+| `planning/proposal.md` | 공모전 기획 제안서 | 백엔드 |
+| `planning/prompt_history.md` | 기획 단계 LLM 대화 기록 | 백엔드 |
+| `planning/design_UXUI_plan.md` | UI/UX 화면 설계 | 백엔드 |
+| `ops/deployment_checklist.md` | Railway 배포 체크리스트 | 백엔드 |
+| `(frontend) design_UXUI/` | 화면별 상세 UX 설계 | 프론트 전용 |
+| `(frontend) design_initial_idea/` | 초기 아이디어 기록 | 프론트 전용 |
 
 ---
 
 ## SECTION 3 — 솔루션 내부 AI 프롬프트 설계 지침
 
 앱 내 Claude API 호출 7종의 설계 원칙과 현행 프롬프트 명세.
-상세 템플릿은 `AI_API_Architecture.md` Section 4를 참조.
+상세 템플릿은 `architecture/AI_API_Architecture.md` Section 4를 참조.
 
 ---
 
@@ -206,7 +226,7 @@ Claude가 반환하는 answer_key는 "1"~"5" 인덱스 문자열이다.
 | v2 | 개성 4종 파라미터 추가 | 획일적 반응 → 감정 투자 강화 |
 | v3 | memory_context 주입 | 페르소나가 배운 것 이상을 알면 비현실적 |
 | v4 | 오류 삽입 기능 추가 | 교정 능력 테스트로 이해도 측정 강화 |
-| v5 | 멀티턴 messages 배열 방식 전환 | 4번 이후 응답 중단 버그 수정 (단일 메시지 → 대화 히스토리) |
+| v5 | 멀티턴 messages 배열 방식 전환 | 4번 이후 응답 중단 버그 수정 |
 
 ---
 
@@ -218,7 +238,7 @@ Claude가 반환하는 answer_key는 "1"~"5" 인덱스 문자열이다.
 1. 사용자 정의 커리큘럼 기반 — 학년 스펙이 아닌 실제 teaching_sessions 내용에서만 출제
 2. weak_point_tags에서 최소 2문항 출제
 3. 객관식 answer_key는 인덱스(1~5)가 아닌 실제 보기 텍스트로 변환하여 저장
-4. max_tokens=1,200 (5문항 JSON 충분히 담기 위해)
+4. max_tokens=1,200
 
 **고도화 이력**:
 
@@ -234,8 +254,7 @@ Claude가 반환하는 answer_key는 "1"~"5" 인덱스 문자열이다.
 
 **목적**: 페르소나가 망각 곡선 기반 오답 확률로 시험을 치르는 시뮬레이션
 
-**현행 구현**: 현재 서버에서 홀/짝 번호로 정오답을 결정하는 단순화 로직 사용.
-Post-MVP에서 Claude Haiku 연동 예정.
+**현행 구현**: 서버에서 홀/짝 번호로 정오답을 결정하는 단순화 로직. Post-MVP에서 Claude 연동 예정.
 
 **망각-오답 확률 매핑**:
 ```
@@ -250,8 +269,6 @@ Post-MVP에서 Claude Haiku 연동 예정.
 
 **목적**: 세션 종료 시 대화를 4기준(정확성/깊이/예시/완결성)으로 채점
 
-**고도화 이력**:
-
 | 버전 | 변경 내용 |
 |------|---------|
 | v1 | 메시지 길이 기반 단순 점수 계산 |
@@ -261,8 +278,7 @@ Post-MVP에서 Claude Haiku 연동 예정.
 
 ### Prompt 5: 세션 요약 생성 (Claude Haiku)
 
-**목적**: 토큰 폭발 방지를 위해 세션 종료 시 대화 내용을 JSON 요약본으로 압축
-→ 원본 메시지 대신 요약본을 persona_memory에 저장
+**목적**: 토큰 폭발 방지 — 세션 종료 시 대화 내용을 JSON 요약본으로 압축하여 persona_memory에 저장
 
 ---
 
@@ -289,15 +305,12 @@ Post-MVP에서 Claude Haiku 연동 예정.
 ```
 1. 역할 명확화 (Role Clarity)
    → SYSTEM에 AI의 역할, 제약, 금지 사항을 명시적으로 정의
-   → "너는 ~이다" 형식으로 페르소나 고정
 
 2. 출력 형식 고정 (Structured Output)
-   → 모든 프롬프트는 JSON만 출력을 요구 → 백엔드 파싱 안정성 확보
-   → 스키마를 프롬프트에 명시하여 필드 누락 방지
+   → 모든 프롬프트는 JSON만 출력 요구 → 백엔드 파싱 안정성 확보
 
 3. 과목 중립성 (Subject Agnostic)
-   → 특정 과목(수학 등)을 하드코딩하지 않는다
-   → 항상 {subject_name} 파라미터로 동적 주입
+   → {subject_name} 파라미터로 동적 주입, 특정 과목 하드코딩 금지
 
 4. 컨텍스트 주입 (Context Injection)
    → 페르소나 메모리, 개성 파라미터를 동적 주입
@@ -307,7 +320,7 @@ Post-MVP에서 Claude Haiku 연동 예정.
    → "절대 하지 말아야 할 것"을 명시 (예: 답 먼저 말하지 않기, JSON만 출력)
 
 6. 폴백 처리 (Fallback Handling)
-   → Claude가 기대한 형식을 반환하지 않을 때의 서버 측 처리 로직 필수
+   → Claude가 기대한 형식 반환 실패 시 서버 측 처리 로직 필수
    → 시험 문제 5개 미만 시 서버에서 fallback 문항 보충
 ```
 
@@ -319,12 +332,11 @@ Post-MVP에서 Claude Haiku 연동 예정.
 [기술적 완성도]
 - Claude API를 7개의 역할 분리된 프롬프트로 활용
 - 각 프롬프트는 역할, 제약, 출력 형식이 명확히 정의됨
-- 멀티턴 대화, JSONB 상태 관리, SSE 스트리밍 등 실제 구현 복잡도 높음
+- 멀티턴 대화, JSONB 상태 관리, SSE 스트리밍 등 구현 복잡도 높음
 
 [AI활용 능력 및 효율성]
 - 모델 티어링: 품질 중요 작업 → Sonnet, 구조화 출력 → Haiku (비용 60~70% 절감)
-- 프롬프트 히스토리(prompt_history.md)로 기획 전 과정 문서화
-- 이 지침서(instruction.md)로 프롬프트 설계 근거 명시
+- 프롬프트 히스토리(planning/prompt_history.md)로 기획 전 과정 문서화
 
 [기획력 및 실무 접합성]
 - 교육학 이론(파인만 기법, 에빙하우스 망각 곡선, 프로테제 효과) 기반 설계
@@ -338,5 +350,5 @@ Post-MVP에서 Claude Haiku 연동 예정.
 
 ---
 
-*작성: 사용자(태훈) × AI(Claude Sonnet 4.6) 협업*
+*작성: 태훈 × Claude Sonnet 4.6 (바이브코딩)*
 *최종 업데이트: 2026-04-12*
