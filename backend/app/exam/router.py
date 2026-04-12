@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -5,13 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.client import ClaudeClient
+from app.ai.prompts import build_exam_questions_prompt
 from app.common.audit import audit_event
 from app.common.rate_limit import rate_limit
 from app.common.weak_points import upsert_weak_point_tag
-from app.db.models import Exam, Persona, StageCurriculumItem, TeachingSession, WeakPointTag
+from app.db.models import CurriculumItem, Exam, Persona, StageCurriculumItem, TeachingSession, WeakPointTag
 from app.db.session import get_db
 from app.deps import get_current_user_id
 from app.exam.schemas import CreateExamResponse, ExamQuestionOut, SubmitExamRequest, SubmitExamResponse
+
+_claude = ClaudeClient()
 
 router = APIRouter(prefix="/exams", tags=["Exam"])
 
@@ -48,23 +53,96 @@ async def _assert_exam_unlocked_by_stage(
         )
 
 
-def _build_questions(stage_id: uuid.UUID, weak_tags: list[str]) -> list[dict]:
+async def _generate_exam_questions(
+    db: AsyncSession,
+    *,
+    persona_id: uuid.UUID,
+    stage_id: uuid.UUID,
+    level: int,
+    weak_tags: list[str],
+) -> list[dict]:
+    """Claude API로 실제 시험 문제를 생성한다."""
+    # 이 스테이지에서 실제로 가르친 커리큘럼 항목 제목 가져오기
+    taught_item_ids = (
+        await db.scalars(
+            select(TeachingSession.curriculum_item_id)
+            .where(
+                TeachingSession.persona_id == persona_id,
+                TeachingSession.curriculum_item_id.in_(
+                    select(StageCurriculumItem.curriculum_item_id).where(StageCurriculumItem.stage_id == stage_id)
+                ),
+            )
+            .distinct()
+        )
+    ).all()
+
+    taught_titles: list[str] = []
+    if taught_item_ids:
+        rows = (
+            await db.scalars(
+                select(CurriculumItem.title).where(CurriculumItem.id.in_(taught_item_ids))
+            )
+        ).all()
+        taught_titles = [t for t in rows if t]
+
+    # Claude API 호출
+    prompt = build_exam_questions_prompt(
+        level=level,
+        taught_concepts=taught_titles,
+        weak_tags=weak_tags,
+    )
+    try:
+        raw = await _claude.complete_text(
+            system_prompt="너는 한국 수학 교육과정 시험 문제를 JSON으로만 출력하는 전문가야.",
+            user_content=prompt,
+            max_tokens=1200,
+        )
+        # JSON 블록 추출 (```json ... ``` 또는 순수 JSON)
+        text = raw.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        data = json.loads(text)
+        questions_raw: list[dict] = data.get("questions", data) if isinstance(data, dict) else data
+    except Exception:
+        questions_raw = []
+
+    # 파싱된 문항을 내부 포맷으로 변환
     questions: list[dict] = []
-    for i in range(1, 6):
-        qtype = "multiple_choice" if i <= 3 else "short_answer"
-        concept = weak_tags[(i - 1) % len(weak_tags)] if weak_tags else f"stage_{stage_id}_concept_{i}"
-        answer = "2" if qtype == "multiple_choice" else f"핵심개념{i}"
+    for i, q in enumerate(questions_raw[:5], start=1):
+        qtype = q.get("type", "multiple_choice")
+        options = q.get("options") if qtype == "multiple_choice" else None
         questions.append(
             {
                 "id": str(uuid.uuid4()),
                 "type": qtype,
-                "content": f"{i}번 문제: {concept}에 대한 이해를 확인하세요.",
-                "options": ["1", "2", "3", "4", "5"] if qtype == "multiple_choice" else None,
-                "answer": answer,
-                "concept_tag": concept,
+                "content": q.get("content", ""),
+                "options": options,
+                "answer": str(q.get("answer_key", "1")),
+                "concept_tag": q.get("concept_tag", taught_titles[i - 1] if i <= len(taught_titles) else ""),
+                "difficulty": int(q.get("difficulty", 1)),
+            }
+        )
+
+    # Claude가 5문항 미만을 반환했을 때 부족분 보충
+    while len(questions) < 5:
+        i = len(questions) + 1
+        qtype = "multiple_choice" if i <= 3 else "short_answer"
+        fallback_concept = taught_titles[(i - 1) % len(taught_titles)] if taught_titles else weak_tags[(i - 1) % len(weak_tags)] if weak_tags else "수학 개념"
+        questions.append(
+            {
+                "id": str(uuid.uuid4()),
+                "type": qtype,
+                "content": f"{fallback_concept}에 대한 다음 중 옳은 것은?",
+                "options": ["모두 맞다", "모두 틀리다", "알 수 없다", "해당 없음", "정의에 따라 다르다"] if qtype == "multiple_choice" else None,
+                "answer": "1" if qtype == "multiple_choice" else fallback_concept,
+                "concept_tag": fallback_concept,
                 "difficulty": 1 if i <= 2 else (2 if i <= 4 else 3),
             }
         )
+
     return questions
 
 
@@ -88,7 +166,13 @@ async def _create_regular_exam(
         )
     ).all()
     weak_tags = [w for w in weak_rows if w][:10]
-    questions = _build_questions(stage_id, weak_tags)
+    questions = await _generate_exam_questions(
+        db,
+        persona_id=persona.id,
+        stage_id=stage_id,
+        level=level,
+        weak_tags=weak_tags,
+    )
 
     exam = Exam(
         persona_id=persona.id,
